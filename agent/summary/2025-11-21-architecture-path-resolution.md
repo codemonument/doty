@@ -96,7 +96,7 @@ Added **Phase 2.1: Path Resolution Strategy** with tasks:
 - Changed `--repo` flag to `--config` / `-c`
 - Updated help text
 - Config file discovery logic
-- Temporary repo_root derivation (will be enhanced in Phase 2.1)
+- Temporary config_dir_or_cwd derivation (will be enhanced in Phase 2.1)
 
 ## Rationale
 

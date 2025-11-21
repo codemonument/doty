@@ -16,7 +16,7 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     let config = DotyConfig::from_file(&config_path).context("Failed to load configuration")?;
 
     // Determine repo root based on path resolution strategy
-    let repo_root = match config.path_resolution {
+    let config_dir_or_cwd = match config.path_resolution {
         PathResolution::Config => {
             // Resolve relative to config file location
             config_path
@@ -32,11 +32,11 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     };
 
     // Load state
-    let state_dir = repo_root.join(".doty/state");
+    let state_dir = config_dir_or_cwd.join(".doty/state");
     let mut state = DotyState::load(&state_dir, &hostname).context("Failed to load state")?;
 
     // Create linker
-    let linker = Linker::new(repo_root.clone(), config.path_resolution);
+    let linker = Linker::new(config_dir_or_cwd.clone(), config.path_resolution);
 
     // Process each package
     let mut all_actions = Vec::new();
@@ -160,7 +160,7 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     let config = DotyConfig::from_file(&config_path).context("Failed to load configuration")?;
 
     // Determine repo root based on path resolution strategy
-    let repo_root = match config.path_resolution {
+    let config_dir_or_cwd = match config.path_resolution {
         PathResolution::Config => {
             // Resolve relative to config file location
             config_path
@@ -176,7 +176,7 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     };
 
     // Load state
-    let state_dir = repo_root.join(".doty/state");
+    let state_dir = config_dir_or_cwd.join(".doty/state");
     let state = DotyState::load(&state_dir, &hostname).context("Failed to load state")?;
 
     if state.links.is_empty() {
@@ -185,7 +185,7 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     }
 
     // Create linker
-    let linker = Linker::new(repo_root, config.path_resolution);
+    let linker = Linker::new(config_dir_or_cwd, config.path_resolution);
 
     // Clean all links
     println!("Removing {} managed link(s)...\n", state.links.len());

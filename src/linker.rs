@@ -34,16 +34,16 @@ pub enum LinkAction {
 /// The Linker handles creating and managing symlinks
 pub struct Linker {
     /// Root directory of the dotfiles repository (or cwd, depending on path_resolution)
-    repo_root: Utf8PathBuf,
+    config_dir_or_cwd: Utf8PathBuf,
     /// Path resolution strategy
     path_resolution: PathResolution,
 }
 
 impl Linker {
     /// Create a new Linker
-    pub fn new(repo_root: Utf8PathBuf, path_resolution: PathResolution) -> Self {
+    pub fn new(config_dir_or_cwd: Utf8PathBuf, path_resolution: PathResolution) -> Self {
         Self {
-            repo_root,
+            config_dir_or_cwd,
             path_resolution,
         }
     }
@@ -58,7 +58,7 @@ impl Linker {
 
     /// LinkFolder strategy: Create a single symlink for the entire directory
     fn link_folder(&self, package: &Package, dry_run: bool) -> Result<Vec<LinkAction>> {
-        let source_path = self.repo_root.join(&package.source);
+        let source_path = self.config_dir_or_cwd.join(&package.source);
         let target_path = self.resolve_target_path(&package.target)?;
 
         // Check if source exists
@@ -117,7 +117,7 @@ impl Linker {
 
     /// LinkFilesRecursive strategy: Recreate directory structure and symlink individual files
     fn link_files_recursive(&self, package: &Package, dry_run: bool) -> Result<Vec<LinkAction>> {
-        let source_path = self.repo_root.join(&package.source);
+        let source_path = self.config_dir_or_cwd.join(&package.source);
         let target_path = self.resolve_target_path(&package.target)?;
 
         // Check if source exists
@@ -279,7 +279,7 @@ impl Linker {
         match self.path_resolution {
             PathResolution::Config => {
                 // Resolve relative to repo_root (which is the config file's directory)
-                Ok(self.repo_root.join(target))
+                Ok(self.config_dir_or_cwd.join(target))
             }
             PathResolution::Cwd => {
                 // Resolve relative to current working directory
@@ -373,30 +373,30 @@ mod tests {
         let test_dir = format!("tests/tmpfs/{}", test_name);
         let _ = fs::remove_dir_all(&test_dir); // Clean up any existing test dir
         
-        let repo_root = format!("{}/repo", test_dir);
+        let config_dir_or_cwd = format!("{}/repo", test_dir);
         
-        fs::create_dir_all(&repo_root).unwrap();
+        fs::create_dir_all(&config_dir_or_cwd).unwrap();
         
         // Convert to absolute path
         let cwd = std::env::current_dir().unwrap();
-        let absolute_repo_root = cwd.join(&repo_root);
-        Utf8PathBuf::from_path_buf(absolute_repo_root).unwrap()
+        let absolute_config_dir_or_cwd = cwd.join(&config_dir_or_cwd);
+        Utf8PathBuf::from_path_buf(absolute_config_dir_or_cwd).unwrap()
     }
 
     #[test]
     fn test_link_folder_creates_symlink() {
-        let repo_root = setup_test_fs("test_link_folder_creates_symlink");
+        let config_dir_or_cwd = setup_test_fs("test_link_folder_creates_symlink");
         
         // Create source directory with a file
-        let nvim_dir = repo_root.join("nvim");
+        let nvim_dir = config_dir_or_cwd.join("nvim");
         fs::create_dir_all(&nvim_dir).unwrap();
         fs::write(nvim_dir.join("init.lua"), "-- config").unwrap();
         
         // Create target directory for testing (relative path)
-        let target_dir = repo_root.parent().unwrap().join("target");
+        let target_dir = config_dir_or_cwd.parent().unwrap().join("target");
         fs::create_dir_all(&target_dir).unwrap();
         
-        let linker = Linker::new(repo_root.clone(), PathResolution::Config);
+        let linker = Linker::new(config_dir_or_cwd.clone(), PathResolution::Config);
         let package = Package {
             source: Utf8PathBuf::from("nvim"),
             target: target_dir.join(".config/nvim"),
@@ -425,16 +425,16 @@ mod tests {
 
     #[test]
     fn test_link_folder_dry_run() {
-        let repo_root = setup_test_fs("test_link_folder_dry_run");
+        let config_dir_or_cwd = setup_test_fs("test_link_folder_dry_run");
         
-        let nvim_dir = repo_root.join("nvim");
+        let nvim_dir = config_dir_or_cwd.join("nvim");
         fs::create_dir_all(&nvim_dir).unwrap();
         
         // Create target directory for testing (relative path)
-        let target_dir = repo_root.parent().unwrap().join("target");
+        let target_dir = config_dir_or_cwd.parent().unwrap().join("target");
         fs::create_dir_all(&target_dir).unwrap();
         
-        let linker = Linker::new(repo_root.clone(), PathResolution::Config);
+        let linker = Linker::new(config_dir_or_cwd.clone(), PathResolution::Config);
         let package = Package {
             source: Utf8PathBuf::from("nvim"),
             target: target_dir.join(".config/nvim"),
@@ -455,18 +455,18 @@ mod tests {
 
     #[test]
     fn test_link_files_recursive_single_file() {
-        let repo_root = setup_test_fs("test_link_files_recursive_single_file");
+        let config_dir_or_cwd = setup_test_fs("test_link_files_recursive_single_file");
         
         // Create source file
-        let zsh_dir = repo_root.join("zsh");
+        let zsh_dir = config_dir_or_cwd.join("zsh");
         fs::create_dir_all(&zsh_dir).unwrap();
         fs::write(zsh_dir.join(".zshrc"), "# zshrc").unwrap();
         
         // Create target directory for testing (relative path)
-        let target_dir = repo_root.parent().unwrap().join("target");
+        let target_dir = config_dir_or_cwd.parent().unwrap().join("target");
         fs::create_dir_all(&target_dir).unwrap();
         
-        let linker = Linker::new(repo_root.clone(), PathResolution::Config);
+        let linker = Linker::new(config_dir_or_cwd.clone(), PathResolution::Config);
         let package = Package {
             source: Utf8PathBuf::from("zsh/.zshrc"),
             target: target_dir.join(".zshrc"),
@@ -495,19 +495,19 @@ mod tests {
 
     #[test]
     fn test_link_files_recursive_directory() {
-        let repo_root = setup_test_fs("test_link_files_recursive_directory");
+        let config_dir_or_cwd = setup_test_fs("test_link_files_recursive_directory");
         
         // Create source directory with multiple files
-        let scripts_dir = repo_root.join("scripts");
+        let scripts_dir = config_dir_or_cwd.join("scripts");
         fs::create_dir_all(&scripts_dir).unwrap();
         fs::write(scripts_dir.join("script1.sh"), "#!/bin/bash").unwrap();
         fs::write(scripts_dir.join("script2.sh"), "#!/bin/bash").unwrap();
         
         // Create target directory for testing (relative path)
-        let target_dir = repo_root.parent().unwrap().join("target");
+        let target_dir = config_dir_or_cwd.parent().unwrap().join("target");
         fs::create_dir_all(&target_dir).unwrap();
         
-        let linker = Linker::new(repo_root.clone(), PathResolution::Config);
+        let linker = Linker::new(config_dir_or_cwd.clone(), PathResolution::Config);
         let package = Package {
             source: Utf8PathBuf::from("scripts"),
             target: target_dir.join("scripts"),
@@ -532,17 +532,17 @@ mod tests {
 
     #[test]
     fn test_clean_removes_links() {
-        let repo_root = setup_test_fs("test_clean_removes_links");
+        let config_dir_or_cwd = setup_test_fs("test_clean_removes_links");
 
         // Create target directory for testing
-        let target_dir = repo_root.parent().unwrap().join("target");
+        let target_dir = config_dir_or_cwd.parent().unwrap().join("target");
         fs::create_dir_all(&target_dir).unwrap();
 
         // Create some symlinks
         let config_dir = target_dir.join(".config");
         fs::create_dir_all(&config_dir).unwrap();
         let nvim_link = config_dir.join("nvim");
-        let source_path = repo_root.join("nvim");
+        let source_path = config_dir_or_cwd.join("nvim");
         fs::create_dir_all(&source_path).unwrap();
 
         // Create actual symlinks
@@ -554,7 +554,7 @@ mod tests {
         }
 
         let zshrc = target_dir.join(".zshrc");
-        let zsh_source = repo_root.join("zsh/.zshrc");
+        let zsh_source = config_dir_or_cwd.join("zsh/.zshrc");
         fs::create_dir_all(zsh_source.parent().unwrap()).unwrap();
         fs::write(&zsh_source, "# zshrc").unwrap();
 
@@ -568,7 +568,7 @@ mod tests {
         state.add_link(nvim_link.clone(), Utf8PathBuf::from("nvim"));
         state.add_link(zshrc.clone(), Utf8PathBuf::from("zsh/.zshrc"));
 
-        let linker = Linker::new(repo_root.clone(), PathResolution::Config);
+        let linker = Linker::new(config_dir_or_cwd.clone(), PathResolution::Config);
         let actions = linker.clean(&state, false).unwrap();
 
         assert_eq!(actions.len(), 2);
@@ -583,10 +583,10 @@ mod tests {
 
     #[test]
     fn test_clean_dry_run() {
-        let repo_root = setup_test_fs("test_clean_dry_run");
+        let config_dir_or_cwd = setup_test_fs("test_clean_dry_run");
 
         // Create target directory for testing
-        let target_dir = repo_root.parent().unwrap().join("target");
+        let target_dir = config_dir_or_cwd.parent().unwrap().join("target");
         fs::create_dir_all(&target_dir).unwrap();
 
         let zshrc = target_dir.join(".zshrc");
@@ -595,7 +595,7 @@ mod tests {
         let mut state = DotyState::new("test-host".to_string());
         state.add_link(zshrc.clone(), Utf8PathBuf::from("zsh/.zshrc"));
 
-        let linker = Linker::new(repo_root.clone(), PathResolution::Config);
+        let linker = Linker::new(config_dir_or_cwd.clone(), PathResolution::Config);
         let actions = linker.clean(&state, true).unwrap();
 
         assert_eq!(actions.len(), 1);

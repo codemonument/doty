@@ -231,7 +231,7 @@ LinkFilesRecursive "zsh/scripts" target="~/scripts"
 **Tasks**:
 - [x] Remove `target_root` field from `Linker` struct
 - [x] Add `path_resolution` field to `Linker` struct
-- [x] Update `Linker::new()` to accept `repo_root` and `path_resolution` parameters
+- [x] Update `Linker::new()` to accept `config_dir_or_cwd` and `path_resolution` parameters
 - [x] Fix `resolve_target_path()` to respect `pathResolution` for relative paths
 - [x] Update `commands.rs` to pass `path_resolution` to `Linker::new()`
 - [x] Fix `clean()` function to handle broken symlinks
