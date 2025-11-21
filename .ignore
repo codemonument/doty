@@ -1,0 +1,4 @@
+# An ignore file for the llms 
+
+# Allow LLMs full access on anything in the agent folder
+!agent/*
