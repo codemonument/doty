@@ -1,0 +1,12 @@
+# Run Scripts with `bx <script-name>`
+version = "0.3.2"
+
+[scripts]
+    doty.cmd         = "cargo run -- %%"
+    doty.description = "Run the doty CLI with any flag"
+
+    # run specific cli commands 
+    rhelp.cmd         = "cargo run -- --help"
+    rhelp.description = "Show the help for the doty CLI"
+    rv.cmd            = "cargo run -- --version"
+    rv.description    = "Show the version of the doty CLI"

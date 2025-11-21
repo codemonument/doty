@@ -1,0 +1,14 @@
+[package]
+name = "doty"
+version = "0.1.0"
+edition = "2021"
+authors = ["bjesuiter"]
+description = "A hybrid dotfiles manager with flexible linking strategies"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive", "cargo"] }
+kdl = "6.0"
+anyhow = "1.0"
+camino = "1.1"
+serde = { version = "1.0", features = ["derive"] }
+hostname = "0.4"
