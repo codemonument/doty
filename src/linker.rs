@@ -126,6 +126,17 @@ impl Linker {
             anyhow::bail!("Source path does not exist: {}", source_path);
         }
 
+        // Check if target path or any parent is a symlink (conflict with LinkFolder)
+        if let Err(e) = self.check_target_path_conflicts(&target_path) {
+            anyhow::bail!(
+                "Cannot create LinkFilesRecursive at '{}': {}\n\
+                 This usually happens when a parent directory is already managed by LinkFolder.\n\
+                 Consider using only LinkFolder or only LinkFilesRecursive for overlapping paths.",
+                package.target,
+                e
+            );
+        }
+
         let mut actions = Vec::new();
 
         // If source is a file, just link it directly
@@ -178,6 +189,16 @@ impl Linker {
         dry_run: bool,
         actions: &mut Vec<LinkAction>,
     ) -> Result<()> {
+        // Check if target directory or any parent is a symlink
+        if let Err(e) = self.check_target_path_conflicts(target_dir) {
+            anyhow::bail!(
+                "Cannot create directory at '{}': {}\n\
+                 This usually happens when a parent directory is already managed by LinkFolder.",
+                target_rel,
+                e
+            );
+        }
+
         // Create target directory if it doesn't exist
         if !target_dir.exists() && !dry_run {
             fs::create_dir_all(target_dir)?;
@@ -254,6 +275,33 @@ impl Linker {
         }
 
         Ok(actions)
+    }
+
+    /// Check if target path or any of its parents is a symlink
+    /// This prevents creating symlinks inside directories that are themselves symlinks
+    fn check_target_path_conflicts(&self, target_path: &Utf8Path) -> Result<()> {
+        // Check each parent directory to see if it's a symlink
+        let mut current = target_path;
+        
+        while let Some(parent) = current.parent() {
+            if parent.as_str().is_empty() || parent.as_str() == "/" {
+                break;
+            }
+            
+            // Check if this parent exists and is a symlink
+            if let Ok(metadata) = fs::symlink_metadata(parent) {
+                if metadata.is_symlink() {
+                    anyhow::bail!(
+                        "Parent directory '{}' is a symlink (created by LinkFolder)",
+                        parent
+                    );
+                }
+            }
+            
+            current = parent;
+        }
+        
+        Ok(())
     }
 
     /// Resolve a target path (handle ~ expansion, absolute paths, and relative paths)
@@ -593,5 +641,55 @@ mod tests {
 
         // Clean up
         let _ = fs::remove_dir_all(format!("tests/tmpfs/test_clean_dry_run"));
+    }
+
+    #[test]
+    fn test_conflict_linkfolder_and_linkfilesrecursive() {
+        let config_dir_or_cwd = setup_test_fs("test_conflict_linkfolder_and_linkfilesrecursive");
+
+        // Create source directory structure
+        let docs_dir = config_dir_or_cwd.join("docs");
+        fs::create_dir_all(docs_dir.join("nested")).unwrap();
+        fs::write(docs_dir.join("nested/guide.md"), "# Guide").unwrap();
+
+        // Create target directory
+        let target_dir = config_dir_or_cwd.parent().unwrap().join("target");
+        fs::create_dir_all(&target_dir).unwrap();
+
+        let linker = Linker::new(config_dir_or_cwd.clone(), PathResolution::Config);
+
+        // First, create a LinkFolder symlink
+        let link_folder_package = Package {
+            source: Utf8PathBuf::from("docs"),
+            target: target_dir.join("documentation"),
+            strategy: LinkStrategy::LinkFolder,
+        };
+
+        let actions = linker.link_package(&link_folder_package, false).unwrap();
+        assert_eq!(actions.len(), 1);
+
+        // Verify the symlink was created
+        let documentation_link = target_dir.join("documentation");
+        assert!(documentation_link.exists());
+        assert!(documentation_link.is_symlink());
+
+        // Now try to create a LinkFilesRecursive inside the symlinked directory
+        let link_files_package = Package {
+            source: Utf8PathBuf::from("docs/nested/guide.md"),
+            target: target_dir.join("documentation/nested/guide.md"),
+            strategy: LinkStrategy::LinkFilesRecursive,
+        };
+
+        // This should fail with a conflict error
+        let result = linker.link_package(&link_files_package, false);
+        assert!(result.is_err());
+        
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Parent directory"));
+        assert!(error_msg.contains("is a symlink"));
+        assert!(error_msg.contains("LinkFolder"));
+
+        // Clean up
+        let _ = fs::remove_dir_all(format!("tests/tmpfs/test_conflict_linkfolder_and_linkfilesrecursive"));
     }
 }

@@ -54,9 +54,11 @@ LinkFilesRecursive "source/docs/nested" {
 }
 
 // Example 5: Nested path to nested path
-LinkFilesRecursive "source/docs/nested/guide.md" {
-    target "target/documentation/nested/guide.md"
-}
+// NOTE: This conflicts with LinkFolder "source/docs" above!
+// Uncommenting this will cause an error (parent is already a symlink)
+// LinkFilesRecursive "source/docs/nested/guide.md" {
+//     target "target/documentation/nested/guide.md"
+// }
 
 //=============================================================================
 // EDGE CASES AND SPECIAL SCENARIOS
