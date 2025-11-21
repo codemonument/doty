@@ -58,6 +58,20 @@ deployed links.
 - **Reasoning**: Rust-native, intuitive CLI-like syntax, supports type
   annotations, and has excellent comment support.
 
+### 3.1 Path Resolution Strategy
+
+Doty supports two strategies for resolving source paths:
+
+- **`cwd` (Current Working Directory)**
+  - Source paths are resolved relative to where `doty` command is executed
+  - **Use Case**: When you want to run `doty` from different locations
+  - **Example**: Running `doty link` from `~/dotfiles/configs/` would resolve `nvim` to `~/dotfiles/configs/nvim`
+
+- **`config` (Config File Location)** *(Default)*
+  - Source paths are resolved relative to the directory containing `doty.kdl`
+  - **Use Case**: Consistent behavior regardless of where command is run
+  - **Example**: If `doty.kdl` is in `~/dotfiles/`, `nvim` always resolves to `~/dotfiles/nvim`
+
 ### Example Config
 
 ```kdl
@@ -65,11 +79,15 @@ deployed links.
 
 // Global defaults
 defaults {
-    // Global settings if needed
+    // Path resolution strategy: "config" (default) or "cwd"
+    // "config" - resolve paths relative to doty.kdl location
+    // "cwd" - resolve paths relative to current working directory
+    pathResolution "config"
 }
 
 // Simple package using LinkFolder (Stow-mode)
 // First argument is the source path relative to the repo root
+// (repo root determined by pathResolution strategy)
 LinkFolder "nvim" {
     target "~/.config/nvim"
 }
@@ -92,8 +110,14 @@ LinkFilesRecursive "zsh/scripts" target="~/scripts"
 - **Description**: Applies the configuration, creating symlinks based on the
   chosen strategy.
 - **Options**:
+  - `--repo <path>`: Override the repository root path (global option)
   - `--dry-run`: Simulates changes (creations/deletions) without modifying the
     filesystem.
+- **Path Resolution**:
+  - If `--repo` is specified, it overrides the `pathResolution` strategy
+  - Otherwise, behavior depends on `defaults.pathResolution`:
+    - `config`: Use directory containing `doty.kdl`
+    - `cwd`: Use current working directory
 - **Logic**:
   1. Read `doty.kdl` and `.doty/state/<hostname>.kdl`.
   2. Calculate Diff (New links, Modified links, Deleted links).
@@ -157,16 +181,24 @@ LinkFilesRecursive "zsh/scripts" target="~/scripts"
 - [x] **State Engine**: Switch from directly using std::fs to using the vfs crate
 - [x] **Tests**: Integration tests for Config and State serialization/deserialization (mock filesystem via vfs crates MemoryFS).
 
-### Phase 2: The Linker (Core Logic)
+### Phase 2: The Linker (Core Logic) ✅
 
-- [ ] **Strategy: LinkFolder**: Implement directory symlinking logic.
-- [ ] **Tests**: Unit tests for LinkFolder (mock filesystem via vfs crates MemoryFS).
-- [ ] **Strategy: LinkFilesRecursive**: Implement recursive file symlinking logic.
-- [ ] **Tests**: Unit tests for LinkFilesRecursive (mock filesystem via vfs crates MemoryFS).
-- [ ] **Command: Link**: Implement `doty link` with `--dry-run` and State updates.
-- [ ] **Tests**: Integration tests for Link (mock filesystem via vfs crates MemoryFS).
-- [ ] **Command: Clean**: Implement `doty clean` using State.
-- [ ] **Tests**: Integration tests for Clean (mock filesystem via vfs crates MemoryFS).
+- [x] **Strategy: LinkFolder**: Implement directory symlinking logic.
+- [x] **Tests**: Unit tests for LinkFolder (mock filesystem via vfs crates MemoryFS).
+- [x] **Strategy: LinkFilesRecursive**: Implement recursive file symlinking logic.
+- [x] **Tests**: Unit tests for LinkFilesRecursive (mock filesystem via vfs crates MemoryFS).
+- [x] **Command: Link**: Implement `doty link` with `--dry-run` and State updates.
+- [x] **Tests**: Integration tests for Link (mock filesystem via vfs crates MemoryFS).
+- [x] **Command: Clean**: Implement `doty clean` using State.
+- [x] **Tests**: Integration tests for Clean (mock filesystem via vfs crates MemoryFS).
+
+### Phase 2.1: Path Resolution Strategy
+
+- [ ] **Config**: Add `pathResolution` field to defaults section
+- [ ] **Parser**: Parse and validate pathResolution setting ("config" or "cwd")
+- [ ] **CLI**: Implement path resolution logic in commands
+- [ ] **Tests**: Unit tests for both resolution strategies
+- [ ] **Documentation**: Update examples and help text
 
 ### Phase 3: Detection & Adoption
 
