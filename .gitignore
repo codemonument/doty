@@ -1,1 +1,5 @@
 /target
+
+# Test temporary directories
+tests/tmpfs/*/
+!tests/tmpfs/.gitkeep

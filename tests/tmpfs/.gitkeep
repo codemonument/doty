@@ -1,0 +1,2 @@
+# This file ensures the tests/tmpfs directory is tracked by git
+# Test repositories will be created here during testing
