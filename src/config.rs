@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use kdl::{KdlDocument, KdlNode};
-use std::fs;
+use vfs::VfsPath;
 
 /// Represents the entire Doty configuration
 #[derive(Debug, Clone, PartialEq)]
@@ -27,10 +27,11 @@ pub enum LinkStrategy {
 }
 
 impl DotyConfig {
-    /// Parse a KDL configuration file
-    pub fn from_file(path: &Utf8PathBuf) -> Result<Self> {
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read config file: {}", path))?;
+    /// Parse a KDL configuration file from VFS
+    pub fn from_vfs(vfs_path: &VfsPath) -> Result<Self> {
+        let content = vfs_path
+            .read_to_string()
+            .with_context(|| format!("Failed to read config file: {}", vfs_path.as_str()))?;
         Self::from_str(&content)
     }
 
@@ -111,6 +112,7 @@ impl DotyConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vfs::MemoryFS;
 
     #[test]
     fn test_parse_link_folder_inline() {
@@ -201,6 +203,56 @@ mod tests {
         "#;
 
         let result = DotyConfig::from_str(config);
+        assert!(result.is_err());
+    }
+
+    // Integration tests with VFS
+    #[test]
+    fn test_from_vfs_memory_fs() {
+        use std::io::Write;
+        
+        let fs = MemoryFS::new();
+        let root = VfsPath::new(fs);
+        
+        let config_content = r#"
+            LinkFolder "nvim" target="~/.config/nvim"
+            LinkFilesRecursive "zsh/.zshrc" target="~/.zshrc"
+        "#;
+        
+        let config_path = root.join("doty.kdl").unwrap();
+        let mut file = config_path.create_file().unwrap();
+        write!(file, "{}", config_content).unwrap();
+        drop(file);
+        
+        let result = DotyConfig::from_vfs(&config_path).unwrap();
+        assert_eq!(result.packages.len(), 2);
+        assert_eq!(result.packages[0].strategy, LinkStrategy::LinkFolder);
+        assert_eq!(result.packages[1].strategy, LinkStrategy::LinkFilesRecursive);
+    }
+
+    #[test]
+    fn test_from_vfs_file_not_found() {
+        let fs = MemoryFS::new();
+        let root = VfsPath::new(fs);
+        let config_path = root.join("nonexistent.kdl").unwrap();
+        
+        let result = DotyConfig::from_vfs(&config_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_vfs_invalid_kdl() {
+        use std::io::Write;
+        
+        let fs = MemoryFS::new();
+        let root = VfsPath::new(fs);
+        
+        let config_path = root.join("doty.kdl").unwrap();
+        let mut file = config_path.create_file().unwrap();
+        write!(file, "invalid {{ kdl syntax").unwrap();
+        drop(file);
+        
+        let result = DotyConfig::from_vfs(&config_path);
         assert!(result.is_err());
     }
 }

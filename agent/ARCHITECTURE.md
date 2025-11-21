@@ -151,21 +151,22 @@ LinkFilesRecursive "zsh/scripts" target="~/scripts"
 - [x] **State Engine**: Implement reading/writing `.doty/state/<hostname>.kdl`.
 - [x] **Tests**: Unit tests for Config and State serialization/deserialization.
 
-### Phase 1.1: Switch from directly using std::fs to using the vfs crate
+### Phase 1.1: Switch from directly using std::fs to using the vfs crate ✅
 
-- [ ] **Config Engine**: Switch from directly using std::fs to using the vfs crate
-- [ ] **State Engine**: Switch from directly using std::fs to using the vfs crate
-- [ ] **Tests**: Integration tests for Config and State serialization/deserialization (mock filesystem via vfs crates MemoryFS).
+- [x] **Config Engine**: Switch from directly using std::fs to using the vfs crate
+- [x] **State Engine**: Switch from directly using std::fs to using the vfs crate
+- [x] **Tests**: Integration tests for Config and State serialization/deserialization (mock filesystem via vfs crates MemoryFS).
 
 ### Phase 2: The Linker (Core Logic)
 
 - [ ] **Strategy: LinkFolder**: Implement directory symlinking logic.
-- [ ] **Strategy: LinkFilesRecursive**: Implement recursive file symlinking
-      logic.
-- [ ] **Command: Link**: Implement `doty link` with `--dry-run` and State
-      updates.
+- [ ] **Tests**: Unit tests for LinkFolder (mock filesystem via vfs crates MemoryFS).
+- [ ] **Strategy: LinkFilesRecursive**: Implement recursive file symlinking logic.
+- [ ] **Tests**: Unit tests for LinkFilesRecursive (mock filesystem via vfs crates MemoryFS).
+- [ ] **Command: Link**: Implement `doty link` with `--dry-run` and State updates.
+- [ ] **Tests**: Integration tests for Link (mock filesystem via vfs crates MemoryFS).
 - [ ] **Command: Clean**: Implement `doty clean` using State.
-- [ ] **Tests**: Integration tests for linking and cleaning (mock filesystem via vfs crates MemoryFS).
+- [ ] **Tests**: Integration tests for Clean (mock filesystem via vfs crates MemoryFS).
 
 ### Phase 3: Detection & Adoption
 
