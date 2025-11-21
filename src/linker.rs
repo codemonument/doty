@@ -33,9 +33,10 @@ pub enum LinkAction {
 
 /// The Linker handles creating and managing symlinks
 pub struct Linker {
-    /// Root directory of the dotfiles repository (or cwd, depending on path_resolution)
+    /// Root directory for resolving relative paths (already resolved based on path_resolution strategy)
     config_dir_or_cwd: Utf8PathBuf,
-    /// Path resolution strategy
+    /// Path resolution strategy (retained for potential future features like debugging or per-package overrides)
+    #[allow(dead_code)]
     path_resolution: PathResolution,
 }
 
@@ -275,21 +276,8 @@ impl Linker {
             return Ok(target.to_path_buf());
         }
         
-        // Handle relative paths based on path resolution strategy
-        match self.path_resolution {
-            PathResolution::Config => {
-                // Resolve relative to repo_root (which is the config file's directory)
-                Ok(self.config_dir_or_cwd.join(target))
-            }
-            PathResolution::Cwd => {
-                // Resolve relative to current working directory
-                let cwd = std::env::current_dir()
-                    .context("Failed to get current working directory")?;
-                let absolute_path = cwd.join(target.as_std_path());
-                Utf8PathBuf::from_path_buf(absolute_path)
-                    .map_err(|_| anyhow::anyhow!("Failed to convert path to UTF-8"))
-            }
-        }
+        // Handle relative paths - config_dir_or_cwd already contains the resolved directory
+        Ok(self.config_dir_or_cwd.join(target))
     }
 
     /// Check if a path is a symlink pointing to the expected target
