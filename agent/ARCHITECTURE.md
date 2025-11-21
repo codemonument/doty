@@ -62,15 +62,37 @@ deployed links.
 
 Doty supports two strategies for resolving source paths:
 
-- **`cwd` (Current Working Directory)**
-  - Source paths are resolved relative to where `doty` command is executed
-  - **Use Case**: When you want to run `doty` from different locations
-  - **Example**: Running `doty link` from `~/dotfiles/configs/` would resolve `nvim` to `~/dotfiles/configs/nvim`
-
 - **`config` (Config File Location)** *(Default)*
   - Source paths are resolved relative to the directory containing `doty.kdl`
   - **Use Case**: Consistent behavior regardless of where command is run
-  - **Example**: If `doty.kdl` is in `~/dotfiles/`, `nvim` always resolves to `~/dotfiles/nvim`
+  - **Example**: If `doty.kdl` is in `~/dotfiles/configs/`, `nvim` always resolves to `~/dotfiles/configs/nvim`
+  - **Benefit**: Allows config file in subdirectory while managing parent directory files
+
+- **`cwd` (Current Working Directory)**
+  - Source paths are resolved relative to where `doty` command is executed
+  - **Use Case**: When you want to run `doty` from different locations with same config
+  - **Example**: Running `doty link` from `~/dotfiles/work/` would resolve `nvim` to `~/dotfiles/work/nvim`
+
+**Example Scenario:**
+```
+~/dotfiles/
+├── configs/
+│   └── doty.kdl          # Config file location
+├── nvim/                 # Source files
+├── zsh/
+└── .doty/
+    └── state/
+
+# With pathResolution "config" (default):
+cd ~/                     # Can run from anywhere
+doty -c ~/dotfiles/configs/doty.kdl link
+# → nvim resolves to ~/dotfiles/configs/nvim (relative to config)
+
+# With pathResolution "cwd":
+cd ~/dotfiles/            # Must run from repo root
+doty -c configs/doty.kdl link
+# → nvim resolves to ~/dotfiles/nvim (relative to cwd)
+```
 
 ### Example Config
 
@@ -104,20 +126,30 @@ LinkFilesRecursive "zsh/scripts" target="~/scripts"
 
 ## 4. CLI Commands
 
+### Global Options
+
+- **`--config <path>` / `-c <path>`**: Path to the config file (default: `./doty.kdl`)
+  - Specifies which config file to use
+  - Can be absolute or relative path
+  - Example: `doty -c ~/dotfiles/configs/doty.kdl link`
+
 ### 4.1 `doty link`
 
 - **Aliases**: `deploy`, `install`, `i`
 - **Description**: Applies the configuration, creating symlinks based on the
   chosen strategy.
 - **Options**:
-  - `--repo <path>`: Override the repository root path (global option)
   - `--dry-run`: Simulates changes (creations/deletions) without modifying the
     filesystem.
-- **Path Resolution**:
-  - If `--repo` is specified, it overrides the `pathResolution` strategy
-  - Otherwise, behavior depends on `defaults.pathResolution`:
-    - `config`: Use directory containing `doty.kdl`
-    - `cwd`: Use current working directory
+- **Config File Discovery**:
+  1. If `--config` / `-c` is specified, use that file
+  2. Otherwise, search for `doty.kdl` in current working directory
+  3. If not found, error with helpful message
+- **Path Resolution of paths inside the config file**:
+  - Behavior depends on `defaults.pathResolution` in config:
+    - `config` (default): Resolve source paths relative to directory containing `doty.kdl`
+    - `cwd`: Resolve source paths relative to current working directory
+  - This allows flexible repo structures (e.g., config in subfolder)
 - **Logic**:
   1. Read `doty.kdl` and `.doty/state/<hostname>.kdl`.
   2. Calculate Diff (New links, Modified links, Deleted links).

@@ -1,14 +1,34 @@
-# Architecture Update: Path Resolution Strategy
+# Architecture Update: Path Resolution Strategy & Config Flag
 
 **Date**: 2025-11-21
 
 ## Summary
 
-Added specification for `pathResolution` configuration option to the ARCHITECTURE.md. This feature allows users to control how source paths are resolved - either relative to the config file location or relative to the current working directory.
+Updated architecture and CLI to use `--config` / `-c` flag instead of `--repo` flag. Added specification for `pathResolution` configuration option. This provides clearer semantics and allows flexible repository structures where the config file can be in a subdirectory.
 
 ## Changes to Architecture
 
-### 1. New Section: Path Resolution Strategy (3.1)
+### 1. CLI Flag Change: `--repo` → `--config` / `-c`
+
+**Old (Confusing):**
+```bash
+doty --repo ~/dotfiles/subfolder link
+# Problem: Sets subfolder as repo root, not just config location
+```
+
+**New (Clear):**
+```bash
+doty --config ~/dotfiles/subfolder/doty.kdl link
+# Clear: Points to config file, pathResolution determines repo root
+```
+
+**Rationale:**
+- `--repo` was ambiguous when config is in subdirectory
+- `--config` clearly specifies config file location
+- `pathResolution` setting in config determines how source paths resolve
+- Supports flexible repo structures
+
+### 2. New Section: Path Resolution Strategy (3.1)
 
 Added detailed explanation of two resolution strategies:
 
@@ -16,15 +36,16 @@ Added detailed explanation of two resolution strategies:
 - Source paths resolved relative to `doty.kdl` location
 - Consistent behavior regardless of where command is run
 - Best for most use cases
+- **Key benefit**: Config can be in subdirectory, still manage parent directory
 
 **`cwd` (Current Working Directory)**
 - Source paths resolved relative to command execution location
 - Flexible for running from different locations
 - Advanced use case
 
-### 2. Updated Example Config
+### 3. Updated Example Config
 
-Added `pathResolution` setting to defaults section:
+Added `pathResolution` setting to defaults section with detailed example:
 
 ```kdl
 defaults {
@@ -32,14 +53,35 @@ defaults {
 }
 ```
 
-### 3. Updated CLI Documentation
+Added example scenario showing flexible repo structure:
+```
+~/dotfiles/
+├── configs/
+│   └── doty.kdl          # Config in subdirectory
+├── nvim/                 # Source files in parent
+├── zsh/
+└── .doty/state/
+```
 
-Clarified interaction between `--repo` flag and `pathResolution`:
-- `--repo` flag overrides pathResolution strategy
-- Without `--repo`, behavior follows config setting
-- Default is "config" if not specified
+### 4. Updated CLI Documentation
 
-### 4. New Implementation Phase
+**Global Options Section:**
+- Added `--config <FILE>` / `-c <FILE>` flag
+- Default: `./doty.kdl` in current directory
+- Can be absolute or relative path
+
+**Config File Discovery:**
+1. If `--config` / `-c` specified, use that file
+2. Otherwise, search for `doty.kdl` in current directory
+3. Error with helpful message if not found
+
+**Path Resolution:**
+- Behavior determined by `defaults.pathResolution` in config
+- `config` mode: Resolve relative to config file directory
+- `cwd` mode: Resolve relative to current working directory
+- Allows flexible repo structures
+
+### 5. New Implementation Phase
 
 Added **Phase 2.1: Path Resolution Strategy** with tasks:
 - Parse pathResolution from config
@@ -47,6 +89,14 @@ Added **Phase 2.1: Path Resolution Strategy** with tasks:
 - Add validation
 - Write tests
 - Update documentation
+
+### 6. Code Changes
+
+**`src/main.rs`:**
+- Changed `--repo` flag to `--config` / `-c`
+- Updated help text
+- Config file discovery logic
+- Temporary repo_root derivation (will be enhanced in Phase 2.1)
 
 ## Rationale
 
@@ -59,24 +109,59 @@ Added **Phase 2.1: Path Resolution Strategy** with tasks:
 
 ### Use Cases
 
-**Config Mode (Default):**
+**Scenario 1: Config in Subdirectory (Common)**
 ```bash
-# Always works the same, regardless of location
-cd ~/
-doty link  # Uses ~/dotfiles/doty.kdl as reference
+# Repo structure:
+~/dotfiles/
+├── configs/doty.kdl    # Config in subdirectory
+├── nvim/               # Source files in parent
+└── zsh/
 
+# With pathResolution "config" (default):
+cd ~/
+doty -c ~/dotfiles/configs/doty.kdl link
+# → nvim resolves to ~/dotfiles/configs/nvim (relative to config)
+# This is why we need pathResolution!
+
+# Better: Use "cwd" mode and run from repo root:
 cd ~/dotfiles/
-doty link  # Same behavior
+doty -c configs/doty.kdl link
+# → nvim resolves to ~/dotfiles/nvim (relative to cwd)
 ```
 
-**CWD Mode:**
+**Scenario 2: Config at Repo Root (Simple)**
 ```bash
-# Flexible for different project structures
+~/dotfiles/
+├── doty.kdl           # Config at root
+├── nvim/
+└── zsh/
+
+# With pathResolution "config" (default):
+cd ~/dotfiles/
+doty link              # Finds ./doty.kdl automatically
+# → nvim resolves to ~/dotfiles/nvim
+
+cd ~/
+doty -c ~/dotfiles/doty.kdl link
+# → Same result, works from anywhere
+```
+
+**Scenario 3: Multiple Configs (Advanced)**
+```bash
+~/dotfiles/
+├── work/
+│   ├── doty.kdl
+│   └── nvim/
+└── personal/
+    ├── doty.kdl
+    └── nvim/
+
+# With pathResolution "cwd":
 cd ~/dotfiles/work/
-doty link  # Uses work/ as root
+doty link              # Uses work/doty.kdl, resolves to work/nvim
 
 cd ~/dotfiles/personal/
-doty link  # Uses personal/ as root
+doty link              # Uses personal/doty.kdl, resolves to personal/nvim
 ```
 
 ## Implementation Notes
@@ -96,7 +181,9 @@ pub enum PathResolution {
 
 ### CLI Logic
 
-1. Check if `--repo` flag provided → use that
+1. Determine config file path:
+   - If `--config` / `-c` provided → use that
+   - Otherwise → search for `doty.kdl` in current directory
 2. Parse `defaults.pathResolution` from config
 3. Apply resolution strategy:
    - `config`: Use parent directory of `doty.kdl`

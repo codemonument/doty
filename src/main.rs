@@ -11,9 +11,9 @@ use std::env;
 #[command(name = "doty")]
 #[command(version, about = "A hybrid dotfiles manager with flexible linking strategies", long_about = None)]
 struct Cli {
-    /// Path to the dotfiles repository (defaults to current directory)
-    #[arg(short, long, global = true)]
-    repo: Option<Utf8PathBuf>,
+    /// Path to the config file (defaults to ./doty.kdl)
+    #[arg(short, long, global = true, value_name = "FILE")]
+    config: Option<Utf8PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -53,13 +53,21 @@ enum Commands {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Determine repo root
-    let repo_root = if let Some(repo) = cli.repo {
-        repo
+    // Determine config file path
+    let config_path = if let Some(config) = cli.config {
+        config
     } else {
-        Utf8PathBuf::from_path_buf(env::current_dir()?)
-            .map_err(|_| anyhow::anyhow!("Current directory path is not valid UTF-8"))?
+        // Default to doty.kdl in current directory
+        let cwd = Utf8PathBuf::from_path_buf(env::current_dir()?)
+            .map_err(|_| anyhow::anyhow!("Current directory path is not valid UTF-8"))?;
+        cwd.join("doty.kdl")
     };
+
+    // For now, derive repo_root from config file location
+    // TODO: In Phase 2.1, this will respect pathResolution setting
+    let repo_root = config_path.parent()
+        .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?
+        .to_path_buf();
 
     match cli.command {
         Commands::Link { dry_run } => {
@@ -68,6 +76,7 @@ fn main() -> anyhow::Result<()> {
             } else {
                 println!("🔗 Link command");
             }
+            println!("Using config: {}", config_path);
             commands::link(repo_root, dry_run)?;
         }
         Commands::Clean { dry_run } => {
@@ -76,6 +85,7 @@ fn main() -> anyhow::Result<()> {
             } else {
                 println!("🧹 Clean command");
             }
+            println!("Using config: {}", config_path);
             commands::clean(repo_root, dry_run)?;
         }
         Commands::Adopt { path } => {
