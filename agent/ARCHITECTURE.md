@@ -213,6 +213,27 @@ LinkFilesRecursive "zsh/scripts" target="~/scripts"
 - [x] **State Engine**: Switch from directly using std::fs to using the vfs crate
 - [x] **Tests**: Integration tests for Config and State serialization/deserialization (mock filesystem via vfs crates MemoryFS).
 
+### Phase 1.2: Remove vfs package and switch to real filesystem testing 🚧
+
+**Problem**: The vfs package is interfering with symlink operations, making it unsuitable for a dotfiles manager that relies heavily on symbolic linking.
+
+**Solution**: 
+1. **Remove vfs package**: Replace all `vfs::VfsPath` operations with `std::fs` and `camino::Utf8PathBuf`
+2. **Update tests**: Switch from `vfs::MemoryFS` to real filesystem testing in `tests/tmpfs/`
+3. **Test isolation**: Create separate "repo" folders for each test (named after the test) to prevent interference
+4. **Git management**: Add `tests/tmpfs/` to `.gitignore` and create `.gitkeep` file
+
+**Tasks**:
+- [ ] Remove vfs dependency from `Cargo.toml`
+- [ ] Update `config.rs` to use `std::fs` instead of `vfs`
+- [ ] Update `state.rs` to use `std::fs` instead of `vfs`
+- [ ] Update `linker.rs` to use `std::fs` instead of `vfs`
+- [ ] Create `tests/tmpfs/` directory with `.gitkeep`
+- [ ] Add `tests/tmpfs/` to `.gitignore`
+- [ ] Refactor all tests to use real filesystem in `tests/tmpfs/`
+- [ ] Ensure each test creates its own isolated directory
+- [ ] Update imports and error handling for std::fs operations
+
 ### Phase 2: The Linker (Core Logic) ✅
 
 - [x] **Strategy: LinkFolder**: Implement directory symlinking logic.
