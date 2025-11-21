@@ -215,25 +215,28 @@ LinkFilesRecursive "zsh/scripts" target="~/scripts"
 
 ### Phase 1.2: Target Path Resolution Fix ✅
 
-**Problem**: The target root in the linker was being calculated from `$HOME` unconditionally, which was incorrect. Target paths should support:
-1. Absolute paths (starting with `/`)
-2. Relative paths (resolved relative to cwd)
-3. `~` expansion (relative to HOME)
+**Problem**: The target root in the linker was being calculated from `$HOME` unconditionally, which was incorrect. Target paths should:
+1. Support absolute paths (starting with `/`)
+2. Support relative paths (resolved based on `pathResolution` strategy)
+3. Support `~` expansion (relative to HOME)
+4. Respect the `pathResolution` strategy (both source AND target paths)
 
 **Solution**: 
-1. **Remove `target_root` parameter**: The `Linker` no longer takes a `target_root` parameter
-2. **Dynamic path resolution**: Target paths are now resolved dynamically based on their format
-3. **Fix `resolve_target_path()`**: Properly handles `~` expansion, absolute paths, and relative paths
+1. **Add `path_resolution` field to `Linker`**: The linker now knows which strategy to use
+2. **Dynamic path resolution**: Target paths are resolved based on their format AND the `pathResolution` strategy
+3. **Fix `resolve_target_path()`**: Properly handles `~` expansion, absolute paths, and relative paths (respecting `pathResolution`)
 4. **Fix `clean()` function**: Use `symlink_metadata()` instead of `exists()` to handle broken symlinks
-5. **Update tests**: All tests now use absolute paths for targets and pass successfully
+5. **Update tests**: All tests now use absolute paths and pass `PathResolution` to the linker
 
 **Tasks**:
 - [x] Remove `target_root` field from `Linker` struct
-- [x] Update `Linker::new()` to only take `repo_root` parameter
-- [x] Fix `resolve_target_path()` to handle all path types correctly
-- [x] Update `commands.rs` to remove `target_root` calculation
+- [x] Add `path_resolution` field to `Linker` struct
+- [x] Update `Linker::new()` to accept `repo_root` and `path_resolution` parameters
+- [x] Fix `resolve_target_path()` to respect `pathResolution` for relative paths
+- [x] Update `commands.rs` to pass `path_resolution` to `Linker::new()`
 - [x] Fix `clean()` function to handle broken symlinks
-- [x] Update all tests to use new constructor and absolute paths
+- [x] Update all tests to pass `PathResolution` parameter
+- [x] Update `setup_test_fs()` to return absolute paths
 - [x] Verify all 34 tests pass
 
 ### Phase 2: The Linker (Core Logic) ✅

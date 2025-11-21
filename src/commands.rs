@@ -36,7 +36,7 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     let mut state = DotyState::load(&state_dir, &hostname).context("Failed to load state")?;
 
     // Create linker
-    let linker = Linker::new(repo_root.clone());
+    let linker = Linker::new(repo_root.clone(), config.path_resolution);
 
     // Process each package
     let mut all_actions = Vec::new();
@@ -185,7 +185,7 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     }
 
     // Create linker
-    let linker = Linker::new(repo_root);
+    let linker = Linker::new(repo_root, config.path_resolution);
 
     // Clean all links
     println!("Removing {} managed link(s)...\n", state.links.len());

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::fs;
 
-use crate::config::{LinkStrategy, Package};
+use crate::config::{LinkStrategy, Package, PathResolution};
 use crate::state::DotyState;
 
 /// Represents the result of a linking operation
@@ -33,14 +33,19 @@ pub enum LinkAction {
 
 /// The Linker handles creating and managing symlinks
 pub struct Linker {
-    /// Root directory of the dotfiles repository
+    /// Root directory of the dotfiles repository (or cwd, depending on path_resolution)
     repo_root: Utf8PathBuf,
+    /// Path resolution strategy
+    path_resolution: PathResolution,
 }
 
 impl Linker {
     /// Create a new Linker
-    pub fn new(repo_root: Utf8PathBuf) -> Self {
-        Self { repo_root }
+    pub fn new(repo_root: Utf8PathBuf, path_resolution: PathResolution) -> Self {
+        Self {
+            repo_root,
+            path_resolution,
+        }
     }
 
     /// Apply a package configuration, creating symlinks
@@ -253,26 +258,38 @@ impl Linker {
     /// Resolve a target path (handle ~ expansion, absolute paths, and relative paths)
     fn resolve_target_path(&self, target: &Utf8Path) -> Result<Utf8PathBuf> {
         let path_str = target.as_str();
-
+        
         // Handle ~ expansion (relative to HOME)
         if let Some(stripped) = path_str.strip_prefix("~/") {
-            let home_dir = std::env::var("HOME").context("HOME environment variable not set")?;
+            let home_dir = std::env::var("HOME")
+                .context("HOME environment variable not set")?;
             return Ok(Utf8PathBuf::from(home_dir).join(stripped));
         } else if path_str == "~" {
-            let home_dir = std::env::var("HOME").context("HOME environment variable not set")?;
+            let home_dir = std::env::var("HOME")
+                .context("HOME environment variable not set")?;
             return Ok(Utf8PathBuf::from(home_dir));
         }
-
+        
         // Handle absolute paths
         if target.is_absolute() {
             return Ok(target.to_path_buf());
         }
-
-        // Handle relative paths (relative to current working directory)
-        let cwd = std::env::current_dir().context("Failed to get current working directory")?;
-        let absolute_path = cwd.join(target.as_std_path());
-        Utf8PathBuf::from_path_buf(absolute_path)
-            .map_err(|_| anyhow::anyhow!("Failed to convert path to UTF-8"))
+        
+        // Handle relative paths based on path resolution strategy
+        match self.path_resolution {
+            PathResolution::Config => {
+                // Resolve relative to repo_root (which is the config file's directory)
+                Ok(self.repo_root.join(target))
+            }
+            PathResolution::Cwd => {
+                // Resolve relative to current working directory
+                let cwd = std::env::current_dir()
+                    .context("Failed to get current working directory")?;
+                let absolute_path = cwd.join(target.as_std_path());
+                Utf8PathBuf::from_path_buf(absolute_path)
+                    .map_err(|_| anyhow::anyhow!("Failed to convert path to UTF-8"))
+            }
+        }
     }
 
     /// Check if a path is a symlink pointing to the expected target
@@ -349,34 +366,37 @@ impl Linker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LinkStrategy;
+    use crate::config::{LinkStrategy, PathResolution};
     use std::fs;
 
     fn setup_test_fs(test_name: &str) -> Utf8PathBuf {
         let test_dir = format!("tests/tmpfs/{}", test_name);
         let _ = fs::remove_dir_all(&test_dir); // Clean up any existing test dir
-
+        
         let repo_root = format!("{}/repo", test_dir);
-
+        
         fs::create_dir_all(&repo_root).unwrap();
-
-        Utf8PathBuf::from(repo_root)
+        
+        // Convert to absolute path
+        let cwd = std::env::current_dir().unwrap();
+        let absolute_repo_root = cwd.join(&repo_root);
+        Utf8PathBuf::from_path_buf(absolute_repo_root).unwrap()
     }
 
     #[test]
     fn test_link_folder_creates_symlink() {
         let repo_root = setup_test_fs("test_link_folder_creates_symlink");
-
+        
         // Create source directory with a file
         let nvim_dir = repo_root.join("nvim");
         fs::create_dir_all(&nvim_dir).unwrap();
         fs::write(nvim_dir.join("init.lua"), "-- config").unwrap();
-
+        
         // Create target directory for testing (relative path)
         let target_dir = repo_root.parent().unwrap().join("target");
         fs::create_dir_all(&target_dir).unwrap();
-
-        let linker = Linker::new(repo_root.clone());
+        
+        let linker = Linker::new(repo_root.clone(), PathResolution::Config);
         let package = Package {
             source: Utf8PathBuf::from("nvim"),
             target: target_dir.join(".config/nvim"),
@@ -406,15 +426,15 @@ mod tests {
     #[test]
     fn test_link_folder_dry_run() {
         let repo_root = setup_test_fs("test_link_folder_dry_run");
-
+        
         let nvim_dir = repo_root.join("nvim");
         fs::create_dir_all(&nvim_dir).unwrap();
-
+        
         // Create target directory for testing (relative path)
         let target_dir = repo_root.parent().unwrap().join("target");
         fs::create_dir_all(&target_dir).unwrap();
-
-        let linker = Linker::new(repo_root.clone());
+        
+        let linker = Linker::new(repo_root.clone(), PathResolution::Config);
         let package = Package {
             source: Utf8PathBuf::from("nvim"),
             target: target_dir.join(".config/nvim"),
@@ -436,17 +456,17 @@ mod tests {
     #[test]
     fn test_link_files_recursive_single_file() {
         let repo_root = setup_test_fs("test_link_files_recursive_single_file");
-
+        
         // Create source file
         let zsh_dir = repo_root.join("zsh");
         fs::create_dir_all(&zsh_dir).unwrap();
         fs::write(zsh_dir.join(".zshrc"), "# zshrc").unwrap();
-
+        
         // Create target directory for testing (relative path)
         let target_dir = repo_root.parent().unwrap().join("target");
         fs::create_dir_all(&target_dir).unwrap();
-
-        let linker = Linker::new(repo_root.clone());
+        
+        let linker = Linker::new(repo_root.clone(), PathResolution::Config);
         let package = Package {
             source: Utf8PathBuf::from("zsh/.zshrc"),
             target: target_dir.join(".zshrc"),
@@ -476,18 +496,18 @@ mod tests {
     #[test]
     fn test_link_files_recursive_directory() {
         let repo_root = setup_test_fs("test_link_files_recursive_directory");
-
+        
         // Create source directory with multiple files
         let scripts_dir = repo_root.join("scripts");
         fs::create_dir_all(&scripts_dir).unwrap();
         fs::write(scripts_dir.join("script1.sh"), "#!/bin/bash").unwrap();
         fs::write(scripts_dir.join("script2.sh"), "#!/bin/bash").unwrap();
-
+        
         // Create target directory for testing (relative path)
         let target_dir = repo_root.parent().unwrap().join("target");
         fs::create_dir_all(&target_dir).unwrap();
-
-        let linker = Linker::new(repo_root.clone());
+        
+        let linker = Linker::new(repo_root.clone(), PathResolution::Config);
         let package = Package {
             source: Utf8PathBuf::from("scripts"),
             target: target_dir.join("scripts"),
@@ -548,7 +568,7 @@ mod tests {
         state.add_link(nvim_link.clone(), Utf8PathBuf::from("nvim"));
         state.add_link(zshrc.clone(), Utf8PathBuf::from("zsh/.zshrc"));
 
-        let linker = Linker::new(repo_root.clone());
+        let linker = Linker::new(repo_root.clone(), PathResolution::Config);
         let actions = linker.clean(&state, false).unwrap();
 
         assert_eq!(actions.len(), 2);
@@ -575,7 +595,7 @@ mod tests {
         let mut state = DotyState::new("test-host".to_string());
         state.add_link(zshrc.clone(), Utf8PathBuf::from("zsh/.zshrc"));
 
-        let linker = Linker::new(repo_root.clone());
+        let linker = Linker::new(repo_root.clone(), PathResolution::Config);
         let actions = linker.clean(&state, true).unwrap();
 
         assert_eq!(actions.len(), 1);
