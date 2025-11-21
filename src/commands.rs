@@ -1,26 +1,45 @@
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
+use std::env;
 use vfs::{PhysicalFS, VfsPath};
 
-use crate::config::DotyConfig;
+use crate::config::{DotyConfig, PathResolution};
 use crate::linker::{LinkAction, Linker};
 use crate::state::DotyState;
 
 /// Execute the link command
-pub fn link(repo_root: Utf8PathBuf, dry_run: bool) -> Result<()> {
+pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     // Get hostname
     let hostname = hostname::get()?
         .to_string_lossy()
         .to_string();
 
-    // Setup VFS with physical filesystem
+    // Determine repo root based on path resolution strategy
+    // First, load the config to determine the path resolution strategy
+    let config_fs = PhysicalFS::new(config_path.parent().unwrap_or_else(|| ".".as_ref()).as_std_path());
+    let config_vfs_root = VfsPath::new(config_fs);
+    let config_vfs_path = config_vfs_root.join(config_path.file_name().unwrap_or("doty.kdl"))?;
+    let config = DotyConfig::from_vfs(&config_vfs_path)
+        .context("Failed to load configuration")?;
+
+    // Determine repo root based on path resolution strategy
+    let repo_root = match config.path_resolution {
+        PathResolution::Config => {
+            // Resolve relative to config file location
+            config_path.parent()
+                .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?
+                .to_path_buf()
+        }
+        PathResolution::Cwd => {
+            // Resolve relative to current working directory
+            Utf8PathBuf::from_path_buf(env::current_dir()?)
+                .map_err(|_| anyhow::anyhow!("Current directory path is not valid UTF-8"))?
+        }
+    };
+
+    // Setup VFS with the determined repo root
     let fs = PhysicalFS::new(repo_root.as_std_path());
     let vfs_root = VfsPath::new(fs);
-
-    // Load config
-    let config_path = vfs_root.join("doty.kdl")?;
-    let config = DotyConfig::from_vfs(&config_path)
-        .context("Failed to load configuration")?;
 
     // Load state
     let state_dir = vfs_root.join(".doty/state")?;
@@ -97,13 +116,36 @@ pub fn link(repo_root: Utf8PathBuf, dry_run: bool) -> Result<()> {
 }
 
 /// Execute the clean command
-pub fn clean(repo_root: Utf8PathBuf, dry_run: bool) -> Result<()> {
+pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     // Get hostname
     let hostname = hostname::get()?
         .to_string_lossy()
         .to_string();
 
-    // Setup VFS with physical filesystem
+    // Determine repo root based on path resolution strategy
+    // First, load the config to determine the path resolution strategy
+    let config_fs = PhysicalFS::new(config_path.parent().unwrap_or_else(|| ".".as_ref()).as_std_path());
+    let config_vfs_root = VfsPath::new(config_fs);
+    let config_vfs_path = config_vfs_root.join(config_path.file_name().unwrap_or("doty.kdl"))?;
+    let config = DotyConfig::from_vfs(&config_vfs_path)
+        .context("Failed to load configuration")?;
+
+    // Determine repo root based on path resolution strategy
+    let repo_root = match config.path_resolution {
+        PathResolution::Config => {
+            // Resolve relative to config file location
+            config_path.parent()
+                .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?
+                .to_path_buf()
+        }
+        PathResolution::Cwd => {
+            // Resolve relative to current working directory
+            Utf8PathBuf::from_path_buf(env::current_dir()?)
+                .map_err(|_| anyhow::anyhow!("Current directory path is not valid UTF-8"))?
+        }
+    };
+
+    // Setup VFS with the determined repo root
     let fs = PhysicalFS::new(repo_root.as_std_path());
     let vfs_root = VfsPath::new(fs);
 

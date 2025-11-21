@@ -224,13 +224,13 @@ LinkFilesRecursive "zsh/scripts" target="~/scripts"
 - [x] **Command: Clean**: Implement `doty clean` using State.
 - [x] **Tests**: Integration tests for Clean (mock filesystem via vfs crates MemoryFS).
 
-### Phase 2.1: Path Resolution Strategy
+### Phase 2.1: Path Resolution Strategy ✅
 
-- [ ] **Config**: Add `pathResolution` field to defaults section
-- [ ] **Parser**: Parse and validate pathResolution setting ("config" or "cwd")
-- [ ] **CLI**: Implement path resolution logic in commands
-- [ ] **Tests**: Unit tests for both resolution strategies
-- [ ] **Documentation**: Update examples and help text
+- [x] **Config**: Add `pathResolution` field to defaults section
+- [x] **Parser**: Parse and validate pathResolution setting ("config" or "cwd")
+- [x] **CLI**: Implement path resolution logic in commands
+- [x] **Tests**: Unit tests for both resolution strategies
+- [x] **Documentation**: Update examples and help text
 
 ### Phase 3: Detection & Adoption
 

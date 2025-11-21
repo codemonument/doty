@@ -3,10 +3,35 @@ use camino::Utf8PathBuf;
 use kdl::{KdlDocument, KdlNode};
 use vfs::VfsPath;
 
+/// Path resolution strategy
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathResolution {
+    /// Resolve paths relative to config file location (default)
+    Config,
+    /// Resolve paths relative to current working directory
+    Cwd,
+}
+
+impl Default for PathResolution {
+    fn default() -> Self {
+        PathResolution::Config
+    }
+}
+
+impl std::fmt::Display for PathResolution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PathResolution::Config => write!(f, "config"),
+            PathResolution::Cwd => write!(f, "cwd"),
+        }
+    }
+}
+
 /// Represents the entire Doty configuration
 #[derive(Debug, Clone, PartialEq)]
 pub struct DotyConfig {
     pub packages: Vec<Package>,
+    pub path_resolution: PathResolution,
 }
 
 /// A package defines a source and how it should be linked
@@ -40,14 +65,51 @@ impl DotyConfig {
         let doc: KdlDocument = content.parse().context("Failed to parse KDL document")?;
 
         let mut packages = Vec::new();
+        let mut path_resolution = PathResolution::default();
 
         for node in doc.nodes() {
             if let Some(package) = Self::parse_package(node)? {
                 packages.push(package);
+            } else if node.name().value() == "defaults" {
+                path_resolution = Self::parse_defaults(node)?;
             }
         }
 
-        Ok(DotyConfig { packages })
+        Ok(DotyConfig { packages, path_resolution })
+    }
+
+    /// Parse the defaults node
+    fn parse_defaults(node: &KdlNode) -> Result<PathResolution> {
+        let mut path_resolution = PathResolution::default();
+
+        if let Some(children) = node.children() {
+            for child in children.nodes() {
+                match child.name().value() {
+                    "pathResolution" => {
+                        let value = child
+                            .entries()
+                            .first()
+                            .and_then(|e| e.value().as_string())
+                            .with_context(|| "pathResolution requires a string value")?;
+                        
+                        path_resolution = match value {
+                            "config" => PathResolution::Config,
+                            "cwd" => PathResolution::Cwd,
+                            other => anyhow::bail!(
+                                "Invalid pathResolution value: {}. Must be 'config' or 'cwd'", 
+                                other
+                            ),
+                        };
+                    }
+                    _other => {
+                        // For now, we only care about pathResolution
+                        // Other defaults can be added later
+                    }
+                }
+            }
+        }
+
+        Ok(path_resolution)
     }
 
     /// Parse a single package node
@@ -55,7 +117,7 @@ impl DotyConfig {
         let strategy = match node.name().value() {
             "LinkFolder" => LinkStrategy::LinkFolder,
             "LinkFilesRecursive" => LinkStrategy::LinkFilesRecursive,
-            "defaults" => return Ok(None), // Skip defaults node for now
+            "defaults" => return Ok(None), // Handle defaults separately
             other => {
                 anyhow::bail!("Unknown node type: {}", other);
             }
@@ -254,5 +316,186 @@ mod tests {
         
         let result = DotyConfig::from_vfs(&config_path);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_defaults_config_resolution() {
+        let config = r#"
+            defaults {
+                pathResolution "config"
+            }
+            LinkFolder "nvim" target="~/.config/nvim"
+        "#;
+
+        let result = DotyConfig::from_str(config).unwrap();
+        assert_eq!(result.path_resolution, PathResolution::Config);
+        assert_eq!(result.packages.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_defaults_cwd_resolution() {
+        let config = r#"
+            defaults {
+                pathResolution "cwd"
+            }
+            LinkFolder "nvim" target="~/.config/nvim"
+        "#;
+
+        let result = DotyConfig::from_str(config).unwrap();
+        assert_eq!(result.path_resolution, PathResolution::Cwd);
+        assert_eq!(result.packages.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_defaults_no_path_resolution() {
+        let config = r#"
+            defaults {
+                // No pathResolution specified
+            }
+            LinkFolder "nvim" target="~/.config/nvim"
+        "#;
+
+        let result = DotyConfig::from_str(config).unwrap();
+        assert_eq!(result.path_resolution, PathResolution::Config); // Default
+        assert_eq!(result.packages.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_no_defaults() {
+        let config = r#"
+            LinkFolder "nvim" target="~/.config/nvim"
+        "#;
+
+        let result = DotyConfig::from_str(config).unwrap();
+        assert_eq!(result.path_resolution, PathResolution::Config); // Default
+        assert_eq!(result.packages.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_invalid_path_resolution() {
+        let config = r#"
+            defaults {
+                pathResolution "invalid"
+            }
+            LinkFolder "nvim" target="~/.config/nvim"
+        "#;
+
+        let result = DotyConfig::from_str(config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid pathResolution value"));
+    }
+
+    #[test]
+    fn test_path_resolution_display() {
+        assert_eq!(PathResolution::Config.to_string(), "config");
+        assert_eq!(PathResolution::Cwd.to_string(), "cwd");
+    }
+
+    // Integration tests for path resolution with VFS
+    #[test]
+    fn test_path_resolution_config_strategy() {
+        use std::io::Write;
+        
+        let fs = MemoryFS::new();
+        let root = VfsPath::new(fs);
+        
+        // Create directory structure: configs/doty.kdl and nvim/ source files
+        let configs_dir = root.join("configs").unwrap();
+        configs_dir.create_dir_all().unwrap();
+        
+        let nvim_dir = root.join("configs/nvim").unwrap();
+        nvim_dir.create_dir_all().unwrap();
+        
+        // Create config file with config path resolution
+        let config_content = r#"
+            defaults {
+                pathResolution "config"
+            }
+            LinkFolder "nvim" target="~/.config/nvim"
+        "#;
+        
+        let config_path = configs_dir.join("doty.kdl").unwrap();
+        let mut file = config_path.create_file().unwrap();
+        write!(file, "{}", config_content).unwrap();
+        drop(file);
+        
+        // Load config and verify path resolution
+        let config = DotyConfig::from_vfs(&config_path).unwrap();
+        assert_eq!(config.path_resolution, PathResolution::Config);
+        assert_eq!(config.packages.len(), 1);
+        
+        // The source path should be resolved relative to config file location
+        // So "nvim" should resolve to "configs/nvim" (relative to config)
+        assert_eq!(config.packages[0].source, Utf8PathBuf::from("nvim"));
+    }
+
+    #[test]
+    fn test_path_resolution_cwd_strategy() {
+        use std::io::Write;
+        
+        let fs = MemoryFS::new();
+        let root = VfsPath::new(fs);
+        
+        // Create directory structure: dotfiles/configs/doty.kdl and dotfiles/nvim/ source files
+        let dotfiles_dir = root.join("dotfiles").unwrap();
+        dotfiles_dir.create_dir_all().unwrap();
+        
+        let configs_dir = dotfiles_dir.join("configs").unwrap();
+        configs_dir.create_dir_all().unwrap();
+        
+        let nvim_dir = dotfiles_dir.join("nvim").unwrap();
+        nvim_dir.create_dir_all().unwrap();
+        
+        // Create config file with cwd path resolution
+        let config_content = r#"
+            defaults {
+                pathResolution "cwd"
+            }
+            LinkFolder "nvim" target="~/.config/nvim"
+        "#;
+        
+        let config_path = configs_dir.join("doty.kdl").unwrap();
+        let mut file = config_path.create_file().unwrap();
+        write!(file, "{}", config_content).unwrap();
+        drop(file);
+        
+        // Load config and verify path resolution
+        let config = DotyConfig::from_vfs(&config_path).unwrap();
+        assert_eq!(config.path_resolution, PathResolution::Cwd);
+        assert_eq!(config.packages.len(), 1);
+        
+        // The source path should be resolved relative to current working directory
+        // So "nvim" should resolve to "nvim" (relative to cwd, which would be dotfiles/)
+        assert_eq!(config.packages[0].source, Utf8PathBuf::from("nvim"));
+    }
+
+    #[test]
+    fn test_path_resolution_default_to_config() {
+        use std::io::Write;
+        
+        let fs = MemoryFS::new();
+        let root = VfsPath::new(fs);
+        
+        // Create directory structure: configs/doty.kdl and nvim/ source files
+        let configs_dir = root.join("configs").unwrap();
+        configs_dir.create_dir_all().unwrap();
+        
+        let nvim_dir = root.join("configs/nvim").unwrap();
+        nvim_dir.create_dir_all().unwrap();
+        
+        // Create config file without explicit path resolution (should default to config)
+        let config_content = r#"
+            LinkFolder "nvim" target="~/.config/nvim"
+        "#;
+        
+        let config_path = configs_dir.join("doty.kdl").unwrap();
+        let mut file = config_path.create_file().unwrap();
+        write!(file, "{}", config_content).unwrap();
+        drop(file);
+        
+        // Load config and verify default path resolution
+        let config = DotyConfig::from_vfs(&config_path).unwrap();
+        assert_eq!(config.path_resolution, PathResolution::Config);
+        assert_eq!(config.packages.len(), 1);
     }
 }

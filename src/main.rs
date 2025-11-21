@@ -63,11 +63,10 @@ fn main() -> anyhow::Result<()> {
         cwd.join("doty.kdl")
     };
 
-    // For now, derive repo_root from config file location
-    // TODO: In Phase 2.1, this will respect pathResolution setting
-    let repo_root = config_path.parent()
-        .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?
-        .to_path_buf();
+    // Check if config file exists
+    if !config_path.as_std_path().exists() {
+        anyhow::bail!("Config file not found: {}", config_path);
+    }
 
     match cli.command {
         Commands::Link { dry_run } => {
@@ -77,7 +76,7 @@ fn main() -> anyhow::Result<()> {
                 println!("🔗 Link command");
             }
             println!("Using config: {}", config_path);
-            commands::link(repo_root, dry_run)?;
+            commands::link(config_path, dry_run)?;
         }
         Commands::Clean { dry_run } => {
             if dry_run {
@@ -86,7 +85,7 @@ fn main() -> anyhow::Result<()> {
                 println!("🧹 Clean command");
             }
             println!("Using config: {}", config_path);
-            commands::clean(repo_root, dry_run)?;
+            commands::clean(config_path, dry_run)?;
         }
         Commands::Adopt { path } => {
             println!("📦 Adopt command for path: {}", path);
