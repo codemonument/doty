@@ -144,12 +144,18 @@ LinkFilesRecursive "zsh/scripts" target="~/scripts"
 
 ## 6. Implementation Phases
 
-### Phase 1: Core Foundation
+### Phase 1: Core Foundation ✅
 
-- [ ] Project setup (`cargo init`, dependencies).
-- [ ] **Config Engine**: Implement `kdl` parsing to Rust structs.
-- [ ] **State Engine**: Implement reading/writing `.doty/state/<hostname>.kdl`.
-- [ ] **Tests**: Unit tests for Config and State serialization/deserialization.
+- [x] Project setup (`cargo init`, dependencies).
+- [x] **Config Engine**: Implement `kdl` parsing to Rust structs.
+- [x] **State Engine**: Implement reading/writing `.doty/state/<hostname>.kdl`.
+- [x] **Tests**: Unit tests for Config and State serialization/deserialization.
+
+### Phase 1.1: Switch from directly using std::fs to using the vfs crate
+
+- [ ] **Config Engine**: Switch from directly using std::fs to using the vfs crate
+- [ ] **State Engine**: Switch from directly using std::fs to using the vfs crate
+- [ ] **Tests**: Integration tests for Config and State serialization/deserialization (mock filesystem via vfs crates MemoryFS).
 
 ### Phase 2: The Linker (Core Logic)
 
@@ -159,7 +165,7 @@ LinkFilesRecursive "zsh/scripts" target="~/scripts"
 - [ ] **Command: Link**: Implement `doty link` with `--dry-run` and State
       updates.
 - [ ] **Command: Clean**: Implement `doty clean` using State.
-- [ ] **Tests**: Integration tests for linking and cleaning (mock filesystem).
+- [ ] **Tests**: Integration tests for linking and cleaning (mock filesystem via vfs crates MemoryFS).
 
 ### Phase 3: Detection & Adoption
 
