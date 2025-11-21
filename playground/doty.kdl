@@ -1,0 +1,96 @@
+// doty.kdl - Comprehensive test configuration for doty
+// This file demonstrates all possible linking combinations and strategies
+
+// Global defaults
+defaults {
+    // Path resolution strategy: "config" (default) or "cwd"
+    // "config" - resolve paths relative to doty.kdl location
+    // "cwd" - resolve paths relative to current working directory
+    pathResolution "config"
+}
+
+//=============================================================================
+// LINKFOLDER STRATEGY (Stow-like)
+// Creates a single symbolic link for the entire directory
+// Use Case: .config/app directories where you want to track ALL files
+//=============================================================================
+
+// Example 1: Basic LinkFolder with block syntax
+LinkFolder "source/configs" {
+    target "target/.configs"
+}
+
+// Example 2: Single line LinkFolder syntax
+LinkFolder "source/scripts" target="target/scripts"
+
+// Example 3: LinkFolder with different target name
+LinkFolder "source/docs" {
+    target "target/documentation"
+}
+
+//=============================================================================
+// LINKFILESRECURSIVE STRATEGY (Dotter-like)
+// Recreates directory structure and symlinks individual files
+// Use Case: Complex configs, apps that dislike symlinked roots, or when
+//           you only want to manage specific files in a shared folder
+//=============================================================================
+
+// Example 1: Single file linking with block syntax
+LinkFilesRecursive "source/config.toml" {
+    target "target/config.toml"
+}
+
+// Example 2: Single line syntax for single file
+LinkFilesRecursive "source/root.txt" target="target/root.txt"
+
+// Example 3: Recursive directory linking (recreates structure)
+LinkFilesRecursive "source/images" {
+    target "target/pictures"
+}
+
+// Example 4: Nested path source to flat target
+LinkFilesRecursive "source/docs/nested" {
+    target "target/nested-docs"
+}
+
+// Example 5: Nested path to nested path
+LinkFilesRecursive "source/docs/nested/guide.md" {
+    target "target/documentation/nested/guide.md"
+}
+
+//=============================================================================
+// EDGE CASES AND SPECIAL SCENARIOS
+//=============================================================================
+
+// Hidden file linking
+LinkFilesRecursive "source/.hidden" {
+    target "target/.hidden"
+}
+
+// Deep nesting - specific file from nested directory
+LinkFilesRecursive "source/configs/dev.toml" {
+    target "target/development.toml"
+}
+
+// Same source to multiple targets (should work)
+LinkFilesRecursive "source/configs/prod.toml" {
+    target "target/production-config.toml"
+}
+
+LinkFilesRecursive "source/configs/prod.toml" {
+    target "target/configs/prod.toml"
+}
+
+//=============================================================================
+// PATH RESOLUTION DEMONSTRATION
+//=============================================================================
+
+// With pathResolution "config" (current setting):
+// - All source paths are relative to this file's location (playground/)
+// - "source/configs" resolves to "playground/source/configs"
+// - Can run doty from anywhere: `cd playground && doty link`
+//
+// To test pathResolution "cwd":
+// - Change defaults.pathResolution to "cwd"
+// - Source paths become relative to where doty command is executed
+// - Must run from playground/: `cd playground && doty link`

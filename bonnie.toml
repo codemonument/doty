@@ -10,3 +10,8 @@ version = "0.3.2"
     rhelp.description = "Show the help for the doty CLI"
     rv.cmd            = "cargo run -- --version"
     rv.description    = "Show the version of the doty CLI"
+
+    pg-dry.cmd         = "cargo run -- link --dry-run -c playground/doty.kdl"
+    pg-dry.description = "Dry run the doty CLI with the playground config"
+    pg.cmd             = "cargo run -- link -c playground/doty.kdl"
+    pg.description     = "Run the doty CLI with the playground config"
