@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use kdl::{KdlDocument, KdlNode};
-use vfs::VfsPath;
+use std::fs;
+use std::path::Path;
 
 /// Path resolution strategy
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,11 +53,10 @@ pub enum LinkStrategy {
 }
 
 impl DotyConfig {
-    /// Parse a KDL configuration file from VFS
-    pub fn from_vfs(vfs_path: &VfsPath) -> Result<Self> {
-        let content = vfs_path
-            .read_to_string()
-            .with_context(|| format!("Failed to read config file: {}", vfs_path.as_str()))?;
+    /// Parse a KDL configuration file from a file path
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read config file: {}", path.as_ref().display()))?;
         Self::from_str(&content)
     }
 
@@ -75,7 +75,10 @@ impl DotyConfig {
             }
         }
 
-        Ok(DotyConfig { packages, path_resolution })
+        Ok(DotyConfig {
+            packages,
+            path_resolution,
+        })
     }
 
     /// Parse the defaults node
@@ -91,12 +94,12 @@ impl DotyConfig {
                             .first()
                             .and_then(|e| e.value().as_string())
                             .with_context(|| "pathResolution requires a string value")?;
-                        
+
                         path_resolution = match value {
                             "config" => PathResolution::Config,
                             "cwd" => PathResolution::Cwd,
                             other => anyhow::bail!(
-                                "Invalid pathResolution value: {}. Must be 'config' or 'cwd'", 
+                                "Invalid pathResolution value: {}. Must be 'config' or 'cwd'",
                                 other
                             ),
                         };
@@ -174,7 +177,7 @@ impl DotyConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vfs::MemoryFS;
+    use std::fs;
 
     #[test]
     fn test_parse_link_folder_inline() {
@@ -268,54 +271,54 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // Integration tests with VFS
+    // Integration tests with real filesystem
     #[test]
-    fn test_from_vfs_memory_fs() {
-        use std::io::Write;
-        
-        let fs = MemoryFS::new();
-        let root = VfsPath::new(fs);
-        
+    fn test_from_file_real_fs() {
+        let test_dir = "tests/tmpfs/test_from_file_real_fs";
+        let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
+        fs::create_dir_all(test_dir).unwrap();
+
         let config_content = r#"
             LinkFolder "nvim" target="~/.config/nvim"
             LinkFilesRecursive "zsh/.zshrc" target="~/.zshrc"
         "#;
-        
-        let config_path = root.join("doty.kdl").unwrap();
-        let mut file = config_path.create_file().unwrap();
-        write!(file, "{}", config_content).unwrap();
-        drop(file);
-        
-        let result = DotyConfig::from_vfs(&config_path).unwrap();
+
+        let config_path = format!("{}/doty.kdl", test_dir);
+        fs::write(&config_path, config_content).unwrap();
+
+        let result = DotyConfig::from_file(&config_path).unwrap();
         assert_eq!(result.packages.len(), 2);
         assert_eq!(result.packages[0].strategy, LinkStrategy::LinkFolder);
-        assert_eq!(result.packages[1].strategy, LinkStrategy::LinkFilesRecursive);
+        assert_eq!(
+            result.packages[1].strategy,
+            LinkStrategy::LinkFilesRecursive
+        );
+
+        // Clean up
+        let _ = fs::remove_dir_all(test_dir);
     }
 
     #[test]
-    fn test_from_vfs_file_not_found() {
-        let fs = MemoryFS::new();
-        let root = VfsPath::new(fs);
-        let config_path = root.join("nonexistent.kdl").unwrap();
-        
-        let result = DotyConfig::from_vfs(&config_path);
+    fn test_from_file_not_found() {
+        let config_path = "tests/tmpfs/nonexistent.kdl";
+        let result = DotyConfig::from_file(config_path);
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_from_vfs_invalid_kdl() {
-        use std::io::Write;
-        
-        let fs = MemoryFS::new();
-        let root = VfsPath::new(fs);
-        
-        let config_path = root.join("doty.kdl").unwrap();
-        let mut file = config_path.create_file().unwrap();
-        write!(file, "invalid {{ kdl syntax").unwrap();
-        drop(file);
-        
-        let result = DotyConfig::from_vfs(&config_path);
+    fn test_from_file_invalid_kdl() {
+        let test_dir = "tests/tmpfs/test_from_file_invalid_kdl";
+        let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
+        fs::create_dir_all(test_dir).unwrap();
+
+        let config_path = format!("{}/doty.kdl", test_dir);
+        fs::write(&config_path, "invalid {{ kdl syntax").unwrap();
+
+        let result = DotyConfig::from_file(&config_path);
         assert!(result.is_err());
+
+        // Clean up
+        let _ = fs::remove_dir_all(test_dir);
     }
 
     #[test]
@@ -382,7 +385,10 @@ mod tests {
 
         let result = DotyConfig::from_str(config);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid pathResolution value"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid pathResolution value"));
     }
 
     #[test]
@@ -391,21 +397,13 @@ mod tests {
         assert_eq!(PathResolution::Cwd.to_string(), "cwd");
     }
 
-    // Integration tests for path resolution with VFS
+    // Integration tests for path resolution with real filesystem
     #[test]
     fn test_path_resolution_config_strategy() {
-        use std::io::Write;
-        
-        let fs = MemoryFS::new();
-        let root = VfsPath::new(fs);
-        
-        // Create directory structure: configs/doty.kdl and nvim/ source files
-        let configs_dir = root.join("configs").unwrap();
-        configs_dir.create_dir_all().unwrap();
-        
-        let nvim_dir = root.join("configs/nvim").unwrap();
-        nvim_dir.create_dir_all().unwrap();
-        
+        let test_dir = "tests/tmpfs/test_path_resolution_config_strategy";
+        let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
+        fs::create_dir_all(format!("{}/configs/nvim", test_dir)).unwrap();
+
         // Create config file with config path resolution
         let config_content = r#"
             defaults {
@@ -413,39 +411,30 @@ mod tests {
             }
             LinkFolder "nvim" target="~/.config/nvim"
         "#;
-        
-        let config_path = configs_dir.join("doty.kdl").unwrap();
-        let mut file = config_path.create_file().unwrap();
-        write!(file, "{}", config_content).unwrap();
-        drop(file);
-        
+
+        let config_path = format!("{}/configs/doty.kdl", test_dir);
+        fs::write(&config_path, config_content).unwrap();
+
         // Load config and verify path resolution
-        let config = DotyConfig::from_vfs(&config_path).unwrap();
+        let config = DotyConfig::from_file(&config_path).unwrap();
         assert_eq!(config.path_resolution, PathResolution::Config);
         assert_eq!(config.packages.len(), 1);
-        
+
         // The source path should be resolved relative to config file location
         // So "nvim" should resolve to "configs/nvim" (relative to config)
         assert_eq!(config.packages[0].source, Utf8PathBuf::from("nvim"));
+
+        // Clean up
+        let _ = fs::remove_dir_all(test_dir);
     }
 
     #[test]
     fn test_path_resolution_cwd_strategy() {
-        use std::io::Write;
-        
-        let fs = MemoryFS::new();
-        let root = VfsPath::new(fs);
-        
-        // Create directory structure: dotfiles/configs/doty.kdl and dotfiles/nvim/ source files
-        let dotfiles_dir = root.join("dotfiles").unwrap();
-        dotfiles_dir.create_dir_all().unwrap();
-        
-        let configs_dir = dotfiles_dir.join("configs").unwrap();
-        configs_dir.create_dir_all().unwrap();
-        
-        let nvim_dir = dotfiles_dir.join("nvim").unwrap();
-        nvim_dir.create_dir_all().unwrap();
-        
+        let test_dir = "tests/tmpfs/test_path_resolution_cwd_strategy";
+        let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
+        fs::create_dir_all(format!("{}/dotfiles/configs", test_dir)).unwrap();
+        fs::create_dir_all(format!("{}/dotfiles/nvim", test_dir)).unwrap();
+
         // Create config file with cwd path resolution
         let config_content = r#"
             defaults {
@@ -453,49 +442,43 @@ mod tests {
             }
             LinkFolder "nvim" target="~/.config/nvim"
         "#;
-        
-        let config_path = configs_dir.join("doty.kdl").unwrap();
-        let mut file = config_path.create_file().unwrap();
-        write!(file, "{}", config_content).unwrap();
-        drop(file);
-        
+
+        let config_path = format!("{}/dotfiles/configs/doty.kdl", test_dir);
+        fs::write(&config_path, config_content).unwrap();
+
         // Load config and verify path resolution
-        let config = DotyConfig::from_vfs(&config_path).unwrap();
+        let config = DotyConfig::from_file(&config_path).unwrap();
         assert_eq!(config.path_resolution, PathResolution::Cwd);
         assert_eq!(config.packages.len(), 1);
-        
+
         // The source path should be resolved relative to current working directory
         // So "nvim" should resolve to "nvim" (relative to cwd, which would be dotfiles/)
         assert_eq!(config.packages[0].source, Utf8PathBuf::from("nvim"));
+
+        // Clean up
+        let _ = fs::remove_dir_all(test_dir);
     }
 
     #[test]
     fn test_path_resolution_default_to_config() {
-        use std::io::Write;
-        
-        let fs = MemoryFS::new();
-        let root = VfsPath::new(fs);
-        
-        // Create directory structure: configs/doty.kdl and nvim/ source files
-        let configs_dir = root.join("configs").unwrap();
-        configs_dir.create_dir_all().unwrap();
-        
-        let nvim_dir = root.join("configs/nvim").unwrap();
-        nvim_dir.create_dir_all().unwrap();
-        
+        let test_dir = "tests/tmpfs/test_path_resolution_default_to_config";
+        let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
+        fs::create_dir_all(format!("{}/configs/nvim", test_dir)).unwrap();
+
         // Create config file without explicit path resolution (should default to config)
         let config_content = r#"
             LinkFolder "nvim" target="~/.config/nvim"
         "#;
-        
-        let config_path = configs_dir.join("doty.kdl").unwrap();
-        let mut file = config_path.create_file().unwrap();
-        write!(file, "{}", config_content).unwrap();
-        drop(file);
-        
+
+        let config_path = format!("{}/configs/doty.kdl", test_dir);
+        fs::write(&config_path, config_content).unwrap();
+
         // Load config and verify default path resolution
-        let config = DotyConfig::from_vfs(&config_path).unwrap();
+        let config = DotyConfig::from_file(&config_path).unwrap();
         assert_eq!(config.path_resolution, PathResolution::Config);
         assert_eq!(config.packages.len(), 1);
+
+        // Clean up
+        let _ = fs::remove_dir_all(test_dir);
     }
 }

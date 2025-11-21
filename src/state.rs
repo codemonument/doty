@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use kdl::{KdlDocument, KdlEntry, KdlNode};
 use std::collections::HashMap;
-use vfs::VfsPath;
+use std::fs;
+use std::path::Path;
 
 /// Represents the state of deployed symlinks on a specific machine
 #[derive(Debug, Clone, PartialEq)]
@@ -21,19 +22,16 @@ impl DotyState {
         }
     }
 
-    /// Load state from VFS, or create new if it doesn't exist
-    pub fn load_vfs(state_dir: &VfsPath, hostname: &str) -> Result<Self> {
-        let state_file = state_dir
-            .join(&format!("{}.kdl", hostname))
-            .with_context(|| format!("Failed to join path: {}.kdl", hostname))?;
+    /// Load state from directory, or create new if it doesn't exist
+    pub fn load<P: AsRef<Path>>(state_dir: P, hostname: &str) -> Result<Self> {
+        let state_file = state_dir.as_ref().join(format!("{}.kdl", hostname));
 
-        if !state_file.exists()? {
+        if !state_file.exists() {
             return Ok(Self::new(hostname.to_string()));
         }
 
-        let content = state_file
-            .read_to_string()
-            .with_context(|| format!("Failed to read state file: {}", state_file.as_str()))?;
+        let content = fs::read_to_string(&state_file)
+            .with_context(|| format!("Failed to read state file: {}", state_file.display()))?;
 
         Self::from_str(&content, hostname)
     }
@@ -84,26 +82,17 @@ impl DotyState {
         Ok((target, source))
     }
 
-    /// Save state to VFS
-    pub fn save_vfs(&self, state_dir: &VfsPath) -> Result<()> {
-        use std::io::Write;
-
+    /// Save state to directory
+    pub fn save<P: AsRef<Path>>(&self, state_dir: P) -> Result<()> {
         // Ensure state directory exists
-        state_dir
-            .create_dir_all()
-            .with_context(|| format!("Failed to create state directory: {}", state_dir.as_str()))?;
+        fs::create_dir_all(&state_dir)
+            .with_context(|| format!("Failed to create state directory: {}", state_dir.as_ref().display()))?;
 
-        let state_file = state_dir
-            .join(&format!("{}.kdl", self.hostname))
-            .with_context(|| format!("Failed to join path: {}.kdl", self.hostname))?;
+        let state_file = state_dir.as_ref().join(format!("{}.kdl", self.hostname));
         
         let content = self.to_kdl();
-        let mut file = state_file
-            .create_file()
-            .with_context(|| format!("Failed to create state file: {}", state_file.as_str()))?;
-        
-        write!(file, "{}", content)
-            .with_context(|| format!("Failed to write state file: {}", state_file.as_str()))?;
+        fs::write(&state_file, content)
+            .with_context(|| format!("Failed to write state file: {}", state_file.display()))?;
 
         Ok(())
     }
@@ -150,7 +139,8 @@ impl DotyState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vfs::MemoryFS;
+    use std::fs;
+    use std::path::Path;
 
     #[test]
     fn test_new_state() {
@@ -229,12 +219,12 @@ mod tests {
         assert_eq!(state, parsed);
     }
 
-    // Integration tests with VFS
+    // Integration tests with real filesystem
     #[test]
-    fn test_save_and_load_vfs() {
-        let fs = MemoryFS::new();
-        let root = VfsPath::new(fs);
-        let state_dir = root.join(".doty/state").unwrap();
+    fn test_save_and_load_real_fs() {
+        let test_dir = "tests/tmpfs/test_save_and_load_real_fs";
+        let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
+        let state_dir = format!("{}/.doty/state", test_dir);
 
         let mut state = DotyState::new("test-host".to_string());
         state.add_link(
@@ -247,49 +237,58 @@ mod tests {
         );
 
         // Save state
-        state.save_vfs(&state_dir).unwrap();
+        state.save(&state_dir).unwrap();
 
         // Load state
-        let loaded = DotyState::load_vfs(&state_dir, "test-host").unwrap();
+        let loaded = DotyState::load(&state_dir, "test-host").unwrap();
 
         assert_eq!(state, loaded);
+
+        // Clean up
+        let _ = fs::remove_dir_all(test_dir);
     }
 
     #[test]
-    fn test_load_vfs_nonexistent() {
-        let fs = MemoryFS::new();
-        let root = VfsPath::new(fs);
-        let state_dir = root.join(".doty/state").unwrap();
+    fn test_load_real_fs_nonexistent() {
+        let test_dir = "tests/tmpfs/test_load_real_fs_nonexistent";
+        let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
+        let state_dir = format!("{}/.doty/state", test_dir);
 
         // Loading non-existent state should return empty state
-        let state = DotyState::load_vfs(&state_dir, "test-host").unwrap();
+        let state = DotyState::load(&state_dir, "test-host").unwrap();
         assert_eq!(state.hostname, "test-host");
         assert_eq!(state.links.len(), 0);
+
+        // Clean up
+        let _ = fs::remove_dir_all(test_dir);
     }
 
     #[test]
-    fn test_save_vfs_creates_directory() {
-        let fs = MemoryFS::new();
-        let root = VfsPath::new(fs);
-        let state_dir = root.join(".doty/state").unwrap();
+    fn test_save_real_fs_creates_directory() {
+        let test_dir = "tests/tmpfs/test_save_real_fs_creates_directory";
+        let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
+        let state_dir = format!("{}/.doty/state", test_dir);
 
         let state = DotyState::new("test-host".to_string());
         
         // Directory doesn't exist yet
-        assert!(!state_dir.exists().unwrap());
+        assert!(!Path::new(&state_dir).exists());
 
         // Save should create directory
-        state.save_vfs(&state_dir).unwrap();
+        state.save(&state_dir).unwrap();
 
         // Directory should now exist
-        assert!(state_dir.exists().unwrap());
+        assert!(Path::new(&state_dir).exists());
+
+        // Clean up
+        let _ = fs::remove_dir_all(test_dir);
     }
 
     #[test]
-    fn test_vfs_roundtrip_multiple_states() {
-        let fs = MemoryFS::new();
-        let root = VfsPath::new(fs);
-        let state_dir = root.join(".doty/state").unwrap();
+    fn test_real_fs_roundtrip_multiple_states() {
+        let test_dir = "tests/tmpfs/test_real_fs_roundtrip_multiple_states";
+        let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
+        let state_dir = format!("{}/.doty/state", test_dir);
 
         // Create and save state for host1
         let mut state1 = DotyState::new("host1".to_string());
@@ -297,7 +296,7 @@ mod tests {
             Utf8PathBuf::from("~/.config/nvim"),
             Utf8PathBuf::from("nvim"),
         );
-        state1.save_vfs(&state_dir).unwrap();
+        state1.save(&state_dir).unwrap();
 
         // Create and save state for host2
         let mut state2 = DotyState::new("host2".to_string());
@@ -305,13 +304,16 @@ mod tests {
             Utf8PathBuf::from("~/.zshrc"),
             Utf8PathBuf::from("zsh/.zshrc"),
         );
-        state2.save_vfs(&state_dir).unwrap();
+        state2.save(&state_dir).unwrap();
 
         // Load both states
-        let loaded1 = DotyState::load_vfs(&state_dir, "host1").unwrap();
-        let loaded2 = DotyState::load_vfs(&state_dir, "host2").unwrap();
+        let loaded1 = DotyState::load(&state_dir, "host1").unwrap();
+        let loaded2 = DotyState::load(&state_dir, "host2").unwrap();
 
         assert_eq!(state1, loaded1);
         assert_eq!(state2, loaded2);
+
+        // Clean up
+        let _ = fs::remove_dir_all(test_dir);
     }
 }

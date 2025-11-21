@@ -2,28 +2,18 @@ use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use colored::Colorize;
 use std::env;
-use vfs::{PhysicalFS, VfsPath};
 
 use crate::config::{DotyConfig, LinkStrategy, PathResolution};
 use crate::linker::{LinkAction, Linker};
 use crate::state::DotyState;
 
-/// Execute the link command
+/// Execute link command
 pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     // Get hostname
     let hostname = hostname::get()?.to_string_lossy().to_string();
 
-    // Determine repo root based on path resolution strategy
-    // First, load the config to determine the path resolution strategy
-    let config_fs = PhysicalFS::new(
-        config_path
-            .parent()
-            .unwrap_or_else(|| ".".as_ref())
-            .as_std_path(),
-    );
-    let config_vfs_root = VfsPath::new(config_fs);
-    let config_vfs_path = config_vfs_root.join(config_path.file_name().unwrap_or("doty.kdl"))?;
-    let config = DotyConfig::from_vfs(&config_vfs_path).context("Failed to load configuration")?;
+    // Load config to determine the path resolution strategy
+    let config = DotyConfig::from_file(&config_path).context("Failed to load configuration")?;
 
     // Determine repo root based on path resolution strategy
     let repo_root = match config.path_resolution {
@@ -41,27 +31,12 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
         }
     };
 
-    // Setup VFS with the determined repo root
-    let fs = PhysicalFS::new(repo_root.as_std_path());
-    let vfs_root = VfsPath::new(fs);
-
     // Load state
-    let state_dir = vfs_root.join(".doty/state")?;
-    let mut state = DotyState::load_vfs(&state_dir, &hostname).context("Failed to load state")?;
-
-    // Get home directory for target root
-    let home_dir = std::env::var("HOME").context("HOME environment variable not set")?;
-    let home_fs = PhysicalFS::new(&home_dir);
-    let target_root = VfsPath::new(home_fs);
-    let target_root_real = Utf8PathBuf::from(&home_dir);
+    let state_dir = repo_root.join(".doty/state");
+    let mut state = DotyState::load(&state_dir, &hostname).context("Failed to load state")?;
 
     // Create linker
-    let linker = Linker::new(
-        vfs_root.clone(),
-        target_root,
-        repo_root.clone(),
-        target_root_real,
-    );
+    let linker = Linker::new(repo_root.clone());
 
     // Process each package
     let mut all_actions = Vec::new();
@@ -123,7 +98,7 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
 
     // Save state
     if !dry_run {
-        state.save_vfs(&state_dir).context("Failed to save state")?;
+        state.save(&state_dir).context("Failed to save state")?;
         println!(
             "\n{} State saved to .doty/state/{}.kdl",
             "✓".green().bold(),
@@ -176,22 +151,13 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-/// Execute the clean command
+/// Execute clean command
 pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     // Get hostname
     let hostname = hostname::get()?.to_string_lossy().to_string();
 
-    // Determine repo root based on path resolution strategy
-    // First, load the config to determine the path resolution strategy
-    let config_fs = PhysicalFS::new(
-        config_path
-            .parent()
-            .unwrap_or_else(|| ".".as_ref())
-            .as_std_path(),
-    );
-    let config_vfs_root = VfsPath::new(config_fs);
-    let config_vfs_path = config_vfs_root.join(config_path.file_name().unwrap_or("doty.kdl"))?;
-    let config = DotyConfig::from_vfs(&config_vfs_path).context("Failed to load configuration")?;
+    // Load config to determine the path resolution strategy
+    let config = DotyConfig::from_file(&config_path).context("Failed to load configuration")?;
 
     // Determine repo root based on path resolution strategy
     let repo_root = match config.path_resolution {
@@ -209,32 +175,17 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
         }
     };
 
-    // Setup VFS with the determined repo root
-    let fs = PhysicalFS::new(repo_root.as_std_path());
-    let vfs_root = VfsPath::new(fs);
-
     // Load state
-    let state_dir = vfs_root.join(".doty/state")?;
-    let state = DotyState::load_vfs(&state_dir, &hostname).context("Failed to load state")?;
+    let state_dir = repo_root.join(".doty/state");
+    let state = DotyState::load(&state_dir, &hostname).context("Failed to load state")?;
 
     if state.links.is_empty() {
         println!("No managed links found for host: {}", hostname);
         return Ok(());
     }
 
-    // Get home directory for target root
-    let home_dir = std::env::var("HOME").context("HOME environment variable not set")?;
-    let home_fs = PhysicalFS::new(&home_dir);
-    let target_root = VfsPath::new(home_fs);
-    let target_root_real = Utf8PathBuf::from(&home_dir);
-
     // Create linker
-    let linker = Linker::new(
-        vfs_root.clone(),
-        target_root,
-        repo_root.clone(),
-        target_root_real,
-    );
+    let linker = Linker::new(repo_root);
 
     // Clean all links
     println!("Removing {} managed link(s)...\n", state.links.len());
@@ -252,7 +203,7 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     if !dry_run {
         let empty_state = DotyState::new(hostname.clone());
         empty_state
-            .save_vfs(&state_dir)
+            .save(&state_dir)
             .context("Failed to save state")?;
         println!(
             "\n{} State cleared for host: {}",

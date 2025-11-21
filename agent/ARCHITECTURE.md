@@ -213,26 +213,28 @@ LinkFilesRecursive "zsh/scripts" target="~/scripts"
 - [x] **State Engine**: Switch from directly using std::fs to using the vfs crate
 - [x] **Tests**: Integration tests for Config and State serialization/deserialization (mock filesystem via vfs crates MemoryFS).
 
-### Phase 1.2: Remove vfs package and switch to real filesystem testing 🚧
+### Phase 1.2: Target Path Resolution Fix ✅
 
-**Problem**: The vfs package is interfering with symlink operations, making it unsuitable for a dotfiles manager that relies heavily on symbolic linking.
+**Problem**: The target root in the linker was being calculated from `$HOME` unconditionally, which was incorrect. Target paths should support:
+1. Absolute paths (starting with `/`)
+2. Relative paths (resolved relative to cwd)
+3. `~` expansion (relative to HOME)
 
 **Solution**: 
-1. **Remove vfs package**: Replace all `vfs::VfsPath` operations with `std::fs` and `camino::Utf8PathBuf`
-2. **Update tests**: Switch from `vfs::MemoryFS` to real filesystem testing in `tests/tmpfs/`
-3. **Test isolation**: Create separate "repo" folders for each test (named after the test) to prevent interference
-4. **Git management**: Add `tests/tmpfs/` to `.gitignore` and create `.gitkeep` file
+1. **Remove `target_root` parameter**: The `Linker` no longer takes a `target_root` parameter
+2. **Dynamic path resolution**: Target paths are now resolved dynamically based on their format
+3. **Fix `resolve_target_path()`**: Properly handles `~` expansion, absolute paths, and relative paths
+4. **Fix `clean()` function**: Use `symlink_metadata()` instead of `exists()` to handle broken symlinks
+5. **Update tests**: All tests now use absolute paths for targets and pass successfully
 
 **Tasks**:
-- [ ] Remove vfs dependency from `Cargo.toml`
-- [ ] Update `config.rs` to use `std::fs` instead of `vfs`
-- [ ] Update `state.rs` to use `std::fs` instead of `vfs`
-- [ ] Update `linker.rs` to use `std::fs` instead of `vfs`
-- [ ] Create `tests/tmpfs/` directory with `.gitkeep`
-- [ ] Add `tests/tmpfs/` to `.gitignore`
-- [ ] Refactor all tests to use real filesystem in `tests/tmpfs/`
-- [ ] Ensure each test creates its own isolated directory
-- [ ] Update imports and error handling for std::fs operations
+- [x] Remove `target_root` field from `Linker` struct
+- [x] Update `Linker::new()` to only take `repo_root` parameter
+- [x] Fix `resolve_target_path()` to handle all path types correctly
+- [x] Update `commands.rs` to remove `target_root` calculation
+- [x] Fix `clean()` function to handle broken symlinks
+- [x] Update all tests to use new constructor and absolute paths
+- [x] Verify all 34 tests pass
 
 ### Phase 2: The Linker (Core Logic) ✅
 
