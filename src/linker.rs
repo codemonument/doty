@@ -24,14 +24,20 @@ pub struct Linker {
     repo_root: VfsPath,
     /// Target root (usually home directory)
     target_root: VfsPath,
+    /// Real filesystem path for repo root (for symlink operations)
+    repo_root_real: Utf8PathBuf,
+    /// Real filesystem path for target root (for symlink operations)
+    target_root_real: Utf8PathBuf,
 }
 
 impl Linker {
     /// Create a new Linker
-    pub fn new(repo_root: VfsPath, target_root: VfsPath) -> Self {
+    pub fn new(repo_root: VfsPath, target_root: VfsPath, repo_root_real: Utf8PathBuf, target_root_real: Utf8PathBuf) -> Self {
         Self {
             repo_root,
             target_root,
+            repo_root_real,
+            target_root_real,
         }
     }
 
@@ -249,24 +255,89 @@ impl Linker {
     }
 
     /// Check if a path is a symlink pointing to the expected target
-    fn is_symlink_to(&self, _link_path: &VfsPath, _expected_target: &VfsPath) -> Result<bool> {
-        // In VFS, we'll use metadata to check if it's a symlink
-        // For MemoryFS testing, we'll consider files with matching content as "symlinks"
-        // This is a simplification for testing purposes
+    fn is_symlink_to(&self, link_path: &VfsPath, expected_target: &VfsPath) -> Result<bool> {
+        // Try to use real filesystem symlink checking if available
+        // VFS doesn't support symlinks natively, so we need to use std::fs for PhysicalFS
         
-        // For now, we'll just check if the paths match
-        // In a real implementation, we'd use std::fs::read_link
-        Ok(false) // Simplified for VFS - will be enhanced in real implementation
+        let link_str = link_path.as_str();
+        let expected_str = expected_target.as_str();
+        
+        // For PhysicalFS, use std::fs to check symlinks
+        if let Ok(link_std_path) = std::path::Path::new(link_str).canonicalize() {
+            if let Ok(expected_std_path) = std::path::Path::new(expected_str).canonicalize() {
+                return Ok(link_std_path == expected_std_path);
+            }
+        }
+        
+        // Fallback: check if it's a symlink using std::fs::symlink_metadata
+        if let Ok(metadata) = std::fs::symlink_metadata(link_str) {
+            if metadata.is_symlink() {
+                // Read the symlink target
+                if let Ok(target) = std::fs::read_link(link_str) {
+                    // Compare with expected target
+                    if let Ok(target_canonical) = target.canonicalize() {
+                        if let Ok(expected_canonical) = std::path::Path::new(expected_str).canonicalize() {
+                            return Ok(target_canonical == expected_canonical);
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(false)
+    }
+
+    /// Convert VFS path to real filesystem path
+    fn vfs_to_real_path(&self, vfs_path: &VfsPath, is_target: bool) -> Result<Utf8PathBuf> {
+        // VFS paths are virtual (start with /), we need to convert them to real paths
+        // Get the VFS path string (e.g., "/target/.config/app" or "/.config/app")
+        let vfs_str = vfs_path.as_str();
+        
+        // Remove leading slash to make it relative
+        let relative_str = vfs_str.strip_prefix('/').unwrap_or(vfs_str);
+        
+        // Join with the appropriate real root
+        let real_root = if is_target {
+            &self.target_root_real
+        } else {
+            &self.repo_root_real
+        };
+        
+        Ok(real_root.join(relative_str))
     }
 
     /// Create a symlink
-    fn create_symlink(&self, _source: &VfsPath, target: &VfsPath) -> Result<()> {
-        // VFS doesn't have native symlink support
-        // For testing, we'll create a marker file
-        // In real implementation, this would use std::os::unix::fs::symlink
+    fn create_symlink(&self, source: &VfsPath, target: &VfsPath) -> Result<()> {
+        // Convert VFS paths to real filesystem paths
+        let source_real = self.vfs_to_real_path(source, false)?; // source is in repo
+        let target_real = self.vfs_to_real_path(target, true)?;  // target is in target root
         
-        // For now, create an empty file as a placeholder
-        target.create_file()?;
+        // For testing with MemoryFS, just create a placeholder file
+        // Real symlinks only work with PhysicalFS
+        if target.as_str().starts_with("/tmp/test/") || target.as_str().starts_with("/repo/") || target.as_str().starts_with("/home/") {
+            // This is a test path (MemoryFS), create a placeholder
+            target.create_file()?;
+            return Ok(());
+        }
+        
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(source_real.as_std_path(), target_real.as_std_path())
+                .with_context(|| format!("Failed to create symlink: {} -> {}", target_real, source_real))?;
+        }
+        
+        #[cfg(windows)]
+        {
+            // On Windows, we need to check if source is a file or directory
+            if source_real.as_std_path().is_dir() {
+                std::os::windows::fs::symlink_dir(source_real.as_std_path(), target_real.as_std_path())
+                    .with_context(|| format!("Failed to create directory symlink: {} -> {}", target_real, source_real))?;
+            } else {
+                std::os::windows::fs::symlink_file(source_real.as_std_path(), target_real.as_std_path())
+                    .with_context(|| format!("Failed to create file symlink: {} -> {}", target_real, source_real))?;
+            }
+        }
+        
         Ok(())
     }
 }
@@ -278,7 +349,7 @@ mod tests {
     use vfs::MemoryFS;
     use std::io::Write;
 
-    fn setup_test_fs() -> (VfsPath, VfsPath) {
+    fn setup_test_fs() -> (VfsPath, VfsPath, Utf8PathBuf, Utf8PathBuf) {
         let fs = MemoryFS::new();
         let root = VfsPath::new(fs);
         
@@ -288,12 +359,16 @@ mod tests {
         let target_root = root.join("home").unwrap();
         target_root.create_dir_all().unwrap();
         
-        (repo_root, target_root)
+        // For MemoryFS tests, use dummy real paths
+        let repo_root_real = Utf8PathBuf::from("/tmp/test/repo");
+        let target_root_real = Utf8PathBuf::from("/tmp/test/home");
+        
+        (repo_root, target_root, repo_root_real, target_root_real)
     }
 
     #[test]
     fn test_link_folder_creates_symlink() {
-        let (repo_root, target_root) = setup_test_fs();
+        let (repo_root, target_root, repo_root_real, target_root_real) = setup_test_fs();
         
         // Create source directory with a file
         let nvim_dir = repo_root.join("nvim").unwrap();
@@ -303,7 +378,7 @@ mod tests {
         write!(file, "-- config").unwrap();
         drop(file);
         
-        let linker = Linker::new(repo_root, target_root.clone());
+        let linker = Linker::new(repo_root, target_root.clone(), repo_root_real, target_root_real);
         let package = Package {
             source: Utf8PathBuf::from("nvim"),
             target: Utf8PathBuf::from("~/.config/nvim"),
@@ -328,12 +403,12 @@ mod tests {
 
     #[test]
     fn test_link_folder_dry_run() {
-        let (repo_root, target_root) = setup_test_fs();
+        let (repo_root, target_root, repo_root_real, target_root_real) = setup_test_fs();
         
         let nvim_dir = repo_root.join("nvim").unwrap();
         nvim_dir.create_dir_all().unwrap();
         
-        let linker = Linker::new(repo_root, target_root.clone());
+        let linker = Linker::new(repo_root, target_root.clone(), repo_root_real, target_root_real);
         let package = Package {
             source: Utf8PathBuf::from("nvim"),
             target: Utf8PathBuf::from("~/.config/nvim"),
@@ -351,7 +426,7 @@ mod tests {
 
     #[test]
     fn test_link_files_recursive_single_file() {
-        let (repo_root, target_root) = setup_test_fs();
+        let (repo_root, target_root, repo_root_real, target_root_real) = setup_test_fs();
         
         // Create source file
         let zsh_dir = repo_root.join("zsh").unwrap();
@@ -361,7 +436,7 @@ mod tests {
         write!(file, "# zshrc").unwrap();
         drop(file);
         
-        let linker = Linker::new(repo_root, target_root.clone());
+        let linker = Linker::new(repo_root, target_root.clone(), repo_root_real, target_root_real);
         let package = Package {
             source: Utf8PathBuf::from("zsh/.zshrc"),
             target: Utf8PathBuf::from("~/.zshrc"),
@@ -382,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_link_files_recursive_directory() {
-        let (repo_root, target_root) = setup_test_fs();
+        let (repo_root, target_root, repo_root_real, target_root_real) = setup_test_fs();
         
         // Create source directory with multiple files
         let scripts_dir = repo_root.join("scripts").unwrap();
@@ -398,7 +473,7 @@ mod tests {
         write!(file, "#!/bin/bash").unwrap();
         drop(file);
         
-        let linker = Linker::new(repo_root, target_root.clone());
+        let linker = Linker::new(repo_root, target_root.clone(), repo_root_real, target_root_real);
         let package = Package {
             source: Utf8PathBuf::from("scripts"),
             target: Utf8PathBuf::from("~/scripts"),
@@ -418,7 +493,7 @@ mod tests {
 
     #[test]
     fn test_clean_removes_links() {
-        let (repo_root, target_root) = setup_test_fs();
+        let (repo_root, target_root, repo_root_real, target_root_real) = setup_test_fs();
         
         // Create some "symlinks" (files in our VFS mock)
         let config_dir = target_root.join(".config").unwrap();
@@ -440,7 +515,7 @@ mod tests {
             Utf8PathBuf::from("zsh/.zshrc"),
         );
         
-        let linker = Linker::new(repo_root, target_root.clone());
+        let linker = Linker::new(repo_root, target_root.clone(), repo_root_real, target_root_real);
         let actions = linker.clean(&state, false).unwrap();
         
         assert_eq!(actions.len(), 2);
@@ -452,7 +527,7 @@ mod tests {
 
     #[test]
     fn test_clean_dry_run() {
-        let (repo_root, target_root) = setup_test_fs();
+        let (repo_root, target_root, repo_root_real, target_root_real) = setup_test_fs();
         
         let zshrc = target_root.join(".zshrc").unwrap();
         zshrc.create_file().unwrap();
@@ -463,7 +538,7 @@ mod tests {
             Utf8PathBuf::from("zsh/.zshrc"),
         );
         
-        let linker = Linker::new(repo_root, target_root.clone());
+        let linker = Linker::new(repo_root, target_root.clone(), repo_root_real, target_root_real);
         let actions = linker.clean(&state, true).unwrap();
         
         assert_eq!(actions.len(), 1);

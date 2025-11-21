@@ -1,0 +1,22 @@
+// Simple test config without conflicts
+defaults {
+    pathResolution "config"
+}
+
+// LinkFolder examples
+LinkFolder "source/configs" {
+    target "target/.config/app"
+}
+
+LinkFolder "source/scripts" target="target/bin"
+
+// LinkFilesRecursive examples
+LinkFilesRecursive "source/config.toml" {
+    target "target/.config/app.toml"
+}
+
+LinkFilesRecursive "source/root.txt" target="target/root-config.txt"
+
+LinkFilesRecursive "source/images" {
+    target "target/pictures"
+}

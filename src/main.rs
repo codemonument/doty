@@ -5,6 +5,7 @@ mod state;
 
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
+use colored::Colorize;
 use std::env;
 
 #[derive(Parser)]
@@ -71,32 +72,32 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Link { dry_run } => {
             if dry_run {
-                println!("🔗 Link command (DRY RUN)");
+                println!("\n{} {}", "Linking 🔗".bold(), "[DRY RUN]".yellow().bold());
             } else {
-                println!("🔗 Link command");
+                println!("\n{}", "Linking 🔗".bold());
             }
-            println!("Using config: {}", config_path);
+            println!("Config: {}\n", config_path);
             commands::link(config_path, dry_run)?;
         }
         Commands::Clean { dry_run } => {
             if dry_run {
-                println!("🧹 Clean command (DRY RUN)");
+                println!("\n{} {}", "Cleaning 🧹".bold(), "[DRY RUN]".yellow().bold());
             } else {
-                println!("🧹 Clean command");
+                println!("\n{}", "Cleaning 🧹".bold());
             }
             println!("Using config: {}", config_path);
             commands::clean(config_path, dry_run)?;
         }
         Commands::Adopt { path } => {
-            println!("📦 Adopt command for path: {}", path);
+            println!("\n{} {}: {}", "Adopting 📦".bold(), "for path".bold(), path);
             println!("Not yet implemented");
         }
         Commands::Detect => {
-            println!("🔍 Detect command");
+            println!("\n{}", "Detecting unmonitored files 🔍".bold());
             println!("Not yet implemented");
         }
         Commands::Status => {
-            println!("📊 Status command");
+            println!("\n{}", "Status 📊".bold());
             println!("Not yet implemented");
         }
     }
