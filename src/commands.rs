@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use colored::Colorize;
+use dialoguer::Confirm;
 use pluralizer::pluralize;
 use std::env;
 
@@ -454,9 +455,9 @@ pub fn detect(config_path: Utf8PathBuf, interactive: bool) -> Result<()> {
         for link in &broken_links {
             // Try to get the source from state for better reporting
             if let Some(source) = state.get_source(link) {
-                println!("  {} {} → {}", "[!]".red().bold(), link, source);
+                println!("  {} {} → {}", "[!]".yellow().bold(), link, source);
             } else {
-                println!("  {} {}", "[!]".red().bold(), link);
+                println!("  {} {}", "[!]".yellow().bold(), link);
             }
         }
     }
@@ -469,16 +470,54 @@ pub fn detect(config_path: Utf8PathBuf, interactive: bool) -> Result<()> {
         for (package_key, untracked_files) in &untracked_by_package {
             if !untracked_files.is_empty() {
                 println!("\n{} {}:", "Adopt untracked files for".bold(), package_key);
-                // TODO: Implement interactive adoption in step 3.3
-                println!("  (Interactive adoption not yet implemented - see step 3.3)");
+                
+                let should_adopt = Confirm::new()
+                    .with_prompt(format!("Adopt these {} untracked files?", untracked_files.len()))
+                    .default(true)
+                    .interact()?;
+                
+                if should_adopt {
+                    // TODO: Implement actual file adoption in step 3.3
+                    println!("  {} {} would be adopted", "✓".green().bold(), pluralize("file", untracked_files.len() as isize, true));
+                    println!("  (File adoption will be implemented in step 3.3)");
+                } else {
+                    println!("  {} Skipped {} untracked files", "−".yellow().bold(), pluralize("file", untracked_files.len() as isize, true));
+                }
             }
         }
 
         // Handle broken links
         if !broken_links.is_empty() {
             println!("\n{}", "Remove broken symlinks?".bold());
-            // TODO: Implement interactive cleanup in step 3.3
-            println!("  (Interactive cleanup not yet implemented - see step 3.3)");
+            
+            let should_remove = Confirm::new()
+                .with_prompt(format!("Remove {} broken symlinks?", broken_links.len()))
+                .default(true)
+                .interact()?;
+            
+            if should_remove {
+                // Remove broken symlinks
+                let mut removed_count = 0;
+                for broken_link in &broken_links {
+                    // Try to remove the broken symlink
+                    if let Err(e) = std::fs::remove_file(broken_link) {
+                        println!("  {} Failed to remove {}: {}", "✗".red().bold(), broken_link, e);
+                    } else {
+                        println!("  {} Removed {}", "✓".green().bold(), broken_link);
+                        removed_count += 1;
+                    }
+                }
+                
+                if removed_count > 0 {
+                    println!("\n{} {} removed", "✓".green().bold(), pluralize("broken symlink", removed_count, true));
+                }
+            } else {
+                println!("  {} Skipped {} broken symlinks", "−".yellow().bold(), pluralize("broken symlink", broken_links.len() as isize, true));
+            }
+        }
+        
+        if !untracked_by_package.is_empty() || !broken_links.is_empty() {
+            println!("\n{} Interactive cleanup completed", "✓".green().bold());
         }
     } else {
         println!("\n{} {} to adopt or cleanup", "Run 'doty detect --interactive'".yellow().bold(), "interactive mode".yellow());

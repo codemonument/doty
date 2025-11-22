@@ -299,6 +299,66 @@ Detect {
 
 **Note**: `LinkFolder` packages won't appear in untracked files section because the entire directory is symlinked.
 
+### 3.2.5 Interactive Cleanup for Detect Command ✅ COMPLETED
+
+**Purpose**: Add interactive cleanup functionality to detect command for removing broken symlinks
+
+**Implementation**:
+- Added `dialoguer = "0.11"` dependency for interactive prompts
+- Updated `detect()` function to handle interactive cleanup
+- Added confirmation prompts for broken symlink removal
+- Implemented actual file removal with error handling
+- Added success/failure reporting with colored output
+
+**Features**:
+```rust
+// Handle broken links in interactive mode
+if !broken_links.is_empty() {
+    println!("\n{}", "Remove broken symlinks?".bold());
+    
+    let should_remove = Confirm::new()
+        .with_prompt(format!("Remove {} broken symlinks?", broken_links.len()))
+        .default(true)
+        .interact()?;
+    
+    if should_remove {
+        // Remove broken symlinks
+        let mut removed_count = 0;
+        for broken_link in &broken_links {
+            if let Err(e) = std::fs::remove_file(broken_link) {
+                println!("  {} Failed to remove {}: {}", "✗".red().bold(), broken_link, e);
+            } else {
+                println!("  {} Removed {}", "✓".green().bold(), broken_link);
+                removed_count += 1;
+            }
+        }
+        
+        if removed_count > 0 {
+            println!("\n{} {} removed", "✓".green().bold(), pluralize("broken symlink", removed_count, true));
+        }
+    } else {
+        println!("  {} Skipped {} broken symlinks", "−".yellow().bold(), pluralize("broken symlink", broken_links.len() as isize, true));
+    }
+}
+```
+
+**CLI Integration**:
+- Interactive mode already supported with existing `--interactive`/`-i` flag
+- Uses `dialoguer::Confirm` for yes/no prompts
+- Maintains consistent error handling and output formatting
+
+**Testing**:
+- Interactive prompts work correctly in terminal environments
+- File removal operations handle errors gracefully
+- Success/failure reporting provides clear feedback
+- All existing tests continue to pass
+
+**Benefits**:
+- ✅ Provides immediate cleanup capability for broken symlinks
+- ✅ Uses established interactive prompt patterns
+- ✅ Maintains consistency with existing CLI design
+- ✅ Handles errors gracefully with clear user feedback
+
 ### 3.3 Adopt Command (`commands.rs::adopt()`)
 
 **Purpose**: Interactive wizard to import existing configs into Doty
