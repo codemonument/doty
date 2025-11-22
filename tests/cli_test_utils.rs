@@ -6,6 +6,31 @@ pub fn get_doty_binary() -> String {
     env!("CARGO_BIN_EXE_doty").to_string()
 }
 
+/// Helper function to run doty with arbitrary arguments
+/// ## Parameters
+/// args: array of arguments to pass to the doty command
+/// ## Returns
+/// Ok(String) containing stdout on success, Err(String) containing stderr on failure
+pub fn run_doty(args: &[impl AsRef<str>]) -> Result<String, String> {
+    let binary = get_doty_binary();
+    let mut cmd = Command::new(binary);
+
+    for arg in args {
+        cmd.arg(arg.as_ref());
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to execute doty: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("doty failed: {}", stderr));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 /// Helper function to run doty link command
 pub fn run_doty_link(config_path: &Path) -> Result<String, String> {
     let binary = get_doty_binary();
