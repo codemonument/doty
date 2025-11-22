@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod fs_utils;
 mod linker;
+mod scanner;
 mod state;
 
 use camino::Utf8PathBuf;
