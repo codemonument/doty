@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 
-use crate::config::{DotyConfig, LinkStrategy, PathResolution};
+use crate::config::{DotyConfig, LinkStrategy, Package, PathResolution};
 use crate::state::DotyState;
 
 /// Represents the result of a linking operation
@@ -109,77 +109,101 @@ impl Linker {
         config: &DotyConfig,
         state: &DotyState,
     ) -> Result<HashMap<Utf8PathBuf, LinkStatus>> {
-        // Indexed by target path
         let mut link_states: HashMap<Utf8PathBuf, LinkStatus> = HashMap::new();
-        let mut explicit_sources: HashSet<Utf8PathBuf> = HashSet::new();
 
-        // 1. Identify explicit sources
+        self.collect_config_states(&mut link_states, config)?;
+        self.merge_state_states(&mut link_states, state);
+        self.enrich_with_reality(&mut link_states)?;
+
+        Ok(link_states)
+    }
+
+    /// Step 1: Collect desired states from config
+    fn collect_config_states(
+        &self,
+        link_states: &mut HashMap<Utf8PathBuf, LinkStatus>,
+        config: &DotyConfig,
+    ) -> Result<()> {
         for package in &config.packages {
-            explicit_sources.insert(package.source.clone());
+            self.process_package(link_states, package)?;
+        }
+        Ok(())
+    }
+
+    /// Process a single package and expand it if necessary
+    fn process_package(
+        &self,
+        link_states: &mut HashMap<Utf8PathBuf, LinkStatus>,
+        package: &Package,
+    ) -> Result<()> {
+        let source_path = self.config_dir_or_cwd.join(&package.source);
+
+        if !source_path.exists() {
+            // It's explicit because it's a package entry
+            self.add_config_status(
+                link_states,
+                package.target.clone(),
+                package.source.clone(),
+                true,  // explicit
+                false, // !exists
+            )?;
+            return Ok(());
         }
 
-        // 2. Process Config (Desired State)
-        for package in &config.packages {
-            let source_path = self.config_dir_or_cwd.join(&package.source);
-            let source_exists = source_path.exists();
-
-            if source_exists {
-                if source_path.is_file() {
+        if source_path.is_file() {
+            self.add_config_status(
+                link_states,
+                package.target.clone(),
+                package.source.clone(),
+                true, // explicit
+                true, // exists
+            )?;
+        } else if source_path.is_dir() {
+            match package.strategy {
+                LinkStrategy::LinkFolder => {
                     self.add_config_status(
-                        &mut link_states,
+                        link_states,
                         package.target.clone(),
                         package.source.clone(),
                         true, // explicit
                         true, // exists
                     )?;
-                } else if source_path.is_dir() {
-                    match package.strategy {
-                        LinkStrategy::LinkFolder => {
-                            self.add_config_status(
-                                &mut link_states,
-                                package.target.clone(),
-                                package.source.clone(),
-                                true, // explicit
-                                true, // exists
-                            )?;
-                        }
-                        LinkStrategy::LinkFilesRecursive => {
-                            for file in self.scan_directory_recursive(&source_path)? {
-                                let relative = file.strip_prefix(&source_path)?;
-                                let target_path = package.target.join(relative);
-                                let source_rel = package.source.join(relative);
-                                self.add_config_status(
-                                    &mut link_states,
-                                    target_path,
-                                    source_rel,
-                                    false, // implicit
-                                    true,  // exists
-                                )?;
-                            }
-                        }
-                    }
                 }
-            } else {
-                // Source doesn't exist
-                if self.is_explicit(&package.source, &explicit_sources) {
-                    self.add_config_status(
-                        &mut link_states,
-                        package.target.clone(),
-                        package.source.clone(),
-                        true,  // explicit
-                        false, // !exists
-                    )?;
+                LinkStrategy::LinkFilesRecursive => {
+                    // This returns a list of files
+                    let files = self.scan_directory_recursive(&source_path)?;
+                    for file in files {
+                        let relative = file.strip_prefix(&source_path)?;
+                        let target_path = package.target.join(relative);
+                        let source_rel = package.source.join(relative);
+                        self.add_config_status(
+                            link_states,
+                            target_path,
+                            source_rel,
+                            false, // implicit
+                            true,  // exists
+                        )?;
+                    }
                 }
             }
         }
+        Ok(())
+    }
 
-        // 3. Process State (Stored State)
+    /// Step 2: Merge stored states from state file
+    fn merge_state_states(
+        &self,
+        link_states: &mut HashMap<Utf8PathBuf, LinkStatus>,
+        state: &DotyState,
+    ) {
         for (target, source) in &state.links {
+            // get the entry with the key of "target path" from link_states map, if not possible,
+            // create a new LinkStatus with the target path and the source path
             let status = link_states
                 .entry(target.clone())
                 .or_insert_with(|| LinkStatus {
                     config_resolved_source: None,
-                    config_resolved_target: None, // Will be filled in step 4 if not already
+                    config_resolved_target: None,
                     config_is_explicit: false,
                     state_resolved_source: None,
                     state_resolved_target: Some(target.clone()),
@@ -191,8 +215,13 @@ impl Linker {
             status.state_resolved_source = Some(source.clone());
             status.state_resolved_target = Some(target.clone());
         }
+    }
 
-        // 4. Process Reality (Filesystem)
+    /// Step 3: Enrich with reality (filesystem check)
+    fn enrich_with_reality(
+        &self,
+        link_states: &mut HashMap<Utf8PathBuf, LinkStatus>,
+    ) -> Result<()> {
         for (target, status) in link_states.iter_mut() {
             // Ensure config_resolved_target is set (it might be None if only in State)
             if status.config_resolved_target.is_none() {
@@ -218,8 +247,7 @@ impl Linker {
                 }
             }
         }
-
-        Ok(link_states)
+        Ok(())
     }
 
     /// Helper to update status with desired info
@@ -367,12 +395,6 @@ impl Linker {
             }
             LinkAction::Warning { .. } | LinkAction::Skipped { .. } => Ok(()),
         }
-    }
-
-    /// Check if a source is explicitly defined in config
-    fn is_explicit(&self, source: &Utf8Path, explicit_sources: &HashSet<Utf8PathBuf>) -> bool {
-        // A source is explicit if it exactly matches an entry in explicit_sources
-        explicit_sources.contains(source)
     }
 
     /// Scan directory recursively and return all files
