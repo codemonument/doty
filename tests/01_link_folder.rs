@@ -76,7 +76,7 @@ fn test_01_link_folder_simple() {
 /// - Tests that doty handles missing source gracefully
 /// Approved by: bjesuiter
 #[test]
-fn test_01_link_folder_src_gone() {
+fn test_02_link_folder_src_gone() {
     // Step 1: Setup paths
     let test_case_dir = Path::new("tests/01_link_folder/src_gone")
         .canonicalize()
