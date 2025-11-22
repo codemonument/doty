@@ -43,6 +43,9 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> 
         }
     };
 
+    println!("{:<10} {}", "Config:", config_path);
+    println!("{:<10} {}\n", "BasePath:", config_dir_or_cwd);
+
     // Load state
     let state_dir = config_dir_or_cwd.join(".doty/state");
     let mut state = DotyState::load(&state_dir, &hostname, config_dir_or_cwd.clone()).context("Failed to load state")?;
@@ -311,6 +314,9 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
         }
     };
 
+    println!("{:<10} {}", "Config:", config_path);
+    println!("{:<10} {}\n", "BasePath:", config_dir_or_cwd);
+
     // Load state
     let state_dir = config_dir_or_cwd.join(".doty/state");
     let state = DotyState::load(&state_dir, &hostname, config_dir_or_cwd.clone()).context("Failed to load state")?;
@@ -397,6 +403,9 @@ pub fn detect(config_path: Utf8PathBuf, interactive: bool) -> Result<()> {
         }
     };
 
+    println!("{:<10} {}", "Config:", config_path);
+    println!("{:<10} {}\n", "BasePath:", config_dir_or_cwd);
+
     // Load state
     let state_dir = config_dir_or_cwd.join(".doty/state");
     let state = DotyState::load(&state_dir, &hostname, config_dir_or_cwd.clone()).context("Failed to load state")?;
@@ -427,7 +436,7 @@ pub fn detect(config_path: Utf8PathBuf, interactive: bool) -> Result<()> {
                 }
             }
             DriftType::Broken => {
-                broken_links.push(item.target_path.clone());
+                broken_links.push(item.clone());
             }
             DriftType::Modified | DriftType::Orphaned => {
                 // These are handled elsewhere or not implemented yet
@@ -452,13 +461,16 @@ pub fn detect(config_path: Utf8PathBuf, interactive: bool) -> Result<()> {
     // Print broken symlinks
     if !broken_links.is_empty() {
         println!("\n{}", "Broken symlinks:".bold());
-        for link in &broken_links {
-            // Try to get the source from state for better reporting
-            if let Some(source) = state.get_source(link) {
-                println!("  {} {} → {}", "[!]".yellow().bold(), link, source);
+        for item in &broken_links {
+            let link = item.target_path.strip_prefix(&config_dir_or_cwd).unwrap_or(&item.target_path);
+            let target_display = if let Some(target) = &item.symlink_target {
+                let relative_target = target.strip_prefix(&config_dir_or_cwd).unwrap_or(target);
+                format!("{} {} {}", "📄".dimmed(), "✗".red().bold(), relative_target)
             } else {
-                println!("  {} {}", "[!]".yellow().bold(), link);
-            }
+                format!("{} {} {}", "📄".dimmed(), "✗".red().bold(), "???")
+            };
+            
+            println!("  {} {} {} → {}", "[!]".yellow().bold(), "🔗".cyan(), link, target_display);
         }
     }
 
@@ -498,7 +510,8 @@ pub fn detect(config_path: Utf8PathBuf, interactive: bool) -> Result<()> {
             if should_remove {
                 // Remove broken symlinks
                 let mut removed_count = 0;
-                for broken_link in &broken_links {
+                for item in &broken_links {
+                    let broken_link = &item.target_path;
                     // Try to remove the broken symlink
                     if let Err(e) = std::fs::remove_file(broken_link) {
                         println!("  {} Failed to remove {}: {}", "✗".red().bold(), broken_link, e);

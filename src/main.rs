@@ -89,7 +89,6 @@ fn main() -> anyhow::Result<()> {
             if force {
                 println!("{} {}", "Mode:".bold(), "FORCE (warnings become removals)".red().bold());
             }
-            println!("Config: {}\n", config_path);
             commands::link(config_path, dry_run, force)?;
         }
         Commands::Clean { dry_run } => {
@@ -98,7 +97,6 @@ fn main() -> anyhow::Result<()> {
             } else {
                 println!("\n{}", "Cleaning 🧹".bold());
             }
-            println!("Using config: {}", config_path);
             commands::clean(config_path, dry_run)?;
         }
         Commands::Adopt { path } => {
@@ -111,7 +109,6 @@ fn main() -> anyhow::Result<()> {
             } else {
                 println!("\n{}", "Detecting unmonitored files 🔍".bold());
             }
-            println!("Config: {}", config_path);
             commands::detect(config_path, interactive)?;
         }
         Commands::Status => {

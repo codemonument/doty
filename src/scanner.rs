@@ -24,6 +24,7 @@ pub struct DriftItem {
     pub target_path: Utf8PathBuf,
     pub drift_type: DriftType,
     pub package: Option<Package>,
+    pub symlink_target: Option<Utf8PathBuf>,
 }
 
 /// Scanner for detecting drift between filesystem reality and Doty's knowledge
@@ -66,10 +67,15 @@ impl Scanner {
                 if let Some(fs_type) = get_fs_type(&resolved_target)? {
                     if fs_type == crate::fs_utils::FsType::Symlink {
                         if is_broken_symlink(&resolved_target)? {
+                            let symlink_target = std::fs::read_link(&resolved_target)
+                                .ok()
+                                .and_then(|p| Utf8PathBuf::from_path_buf(p).ok());
+                                
                             drift_items.push(DriftItem {
                                 target_path: resolved_target,
                                 drift_type: DriftType::Broken,
                                 package: None, // We don't know which package this belongs to
+                                symlink_target,
                             });
                         }
                     }
@@ -98,10 +104,15 @@ impl Scanner {
                 // Only check if the symlink itself is valid
                 // No untracked file detection needed for LinkFolder
                 if is_broken_symlink(&target_path)? {
+                    let symlink_target = std::fs::read_link(&target_path)
+                        .ok()
+                        .and_then(|p| Utf8PathBuf::from_path_buf(p).ok());
+
                     drift_items.push(DriftItem {
                         target_path: target_path.clone(),
                         drift_type: DriftType::Broken,
                         package: Some(package.clone()),
+                        symlink_target,
                     });
                 }
             }
@@ -122,16 +133,22 @@ impl Scanner {
                                 target_path: target_file,
                                 drift_type: DriftType::Untracked,
                                 package: Some(package.clone()),
+                                symlink_target: None,
                             });
                         }
                     }
                 } else {
                     // For file sources, just check if the target is broken
                     if is_broken_symlink(&target_path)? {
+                        let symlink_target = std::fs::read_link(&target_path)
+                            .ok()
+                            .and_then(|p| Utf8PathBuf::from_path_buf(p).ok());
+
                         drift_items.push(DriftItem {
                             target_path: target_path.clone(),
                             drift_type: DriftType::Broken,
                             package: Some(package.clone()),
+                            symlink_target,
                         });
                     }
                 }
