@@ -2,8 +2,8 @@ mod commands;
 mod config;
 mod fs_utils;
 mod linker;
+mod lockfile;
 mod scanner;
-mod state;
 
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
@@ -30,7 +30,7 @@ enum Commands {
         /// Show what would be done without making changes
         #[arg(long)]
         dry_run: bool,
-        
+
         /// Treat warnings as removals (useful for automation)
         #[arg(long)]
         force: bool,
@@ -87,7 +87,11 @@ fn main() -> anyhow::Result<()> {
                 println!("\n{}", "Linking 🔗".bold());
             }
             if force {
-                println!("{} {}", "Mode:".bold(), "FORCE (warnings become removals)".red().bold());
+                println!(
+                    "{} {}",
+                    "Mode:".bold(),
+                    "FORCE (warnings become removals)".red().bold()
+                );
             }
             commands::link(config_path, dry_run, force)?;
         }
@@ -105,7 +109,11 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Detect { interactive } => {
             if interactive {
-                println!("\n{} {}", "Detecting unmonitored files 🔍".bold(), "[INTERACTIVE]".yellow().bold());
+                println!(
+                    "\n{} {}",
+                    "Detecting unmonitored files 🔍".bold(),
+                    "[INTERACTIVE]".yellow().bold()
+                );
             } else {
                 println!("\n{}", "Detecting unmonitored files 🔍".bold());
             }

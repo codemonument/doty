@@ -4,8 +4,10 @@ use std::collections::HashMap;
 use std::fs;
 
 use crate::config::{DotyConfig, LinkStrategy, Package, PathResolution};
-use crate::fs_utils::{scan_directory_recursive, resolve_target_path, FsType, get_fs_type, read_symlink_target};
-use crate::state::DotyState;
+use crate::fs_utils::{
+    get_fs_type, read_symlink_target, resolve_target_path, scan_directory_recursive, FsType,
+};
+use crate::lockfile::Lockfile;
 
 /// Represents the result of a linking operation
 #[derive(Debug, Clone, PartialEq)]
@@ -38,8 +40,6 @@ pub enum LinkAction {
         message: String,
     },
 }
-
-
 
 #[derive(Debug, Clone)]
 struct LinkStatus {
@@ -79,7 +79,7 @@ impl LinkStatus {
         }
     }
 
-    fn from_state(target: Utf8PathBuf, source: Utf8PathBuf) -> Self {
+    fn from_lockfile(target: Utf8PathBuf, source: Utf8PathBuf) -> Self {
         Self {
             config_resolved_source: None,
             config_resolved_target: None,
@@ -125,14 +125,14 @@ impl Linker {
         }
     }
 
-    /// Calculate what actions are needed to sync config with state
+    /// Calculate what actions are needed to sync config with lockfile
     pub fn calculate_diff(
         &self,
         config: &DotyConfig,
-        state: &DotyState,
+        lockfile: &Lockfile,
         force: bool,
     ) -> Result<Vec<LinkAction>> {
-        let link_states = self.gather_link_states(config, state)?;
+        let link_states = self.gather_link_states(config, lockfile)?;
 
         // Determine actions based on gathered statuses
         Ok({
@@ -147,11 +147,11 @@ impl Linker {
         })
     }
 
-    /// Gather information about all relevant targets from Config, State, and Filesystem
+    /// Gather information about all relevant targets from Config, Lockfile, and Filesystem
     fn gather_link_states(
         &self,
         config: &DotyConfig,
-        state: &DotyState,
+        lockfile: &Lockfile,
     ) -> Result<HashMap<Utf8PathBuf, LinkStatus>> {
         // 1. Stream Config Statuses
         let config_stream = config
@@ -159,15 +159,15 @@ impl Linker {
             .iter()
             .flat_map(|pkg| self.expand_package(pkg));
 
-        // 2. Stream State Statuses
-        let state_stream = state
+        // 2. Stream Lockfile Statuses
+        let lockfile_stream = lockfile
             .links
             .iter()
-            .map(|(target, source)| self.create_link_status_from_state(target, source));
+            .map(|(target, source)| self.create_link_status_from_lockfile(target, source));
 
         // 3. Fold into Map
         let mut map: HashMap<Utf8PathBuf, LinkStatus> = HashMap::new();
-        for (target, status) in config_stream.chain(state_stream) {
+        for (target, status) in config_stream.chain(lockfile_stream) {
             map.entry(target)
                 .and_modify(|e| e.merge(status.clone()))
                 .or_insert(status);
@@ -247,21 +247,21 @@ impl Linker {
         results
     }
 
-    /// Create a LinkStatus from state entry
-    fn create_link_status_from_state(
+    /// Create a LinkStatus from lockfile entry
+    fn create_link_status_from_lockfile(
         &self,
         target: &Utf8PathBuf,
         source: &Utf8PathBuf,
     ) -> (Utf8PathBuf, LinkStatus) {
         (
             target.clone(),
-            LinkStatus::from_state(target.clone(), source.clone()),
+            LinkStatus::from_lockfile(target.clone(), source.clone()),
         )
     }
 
     /// Enrich status with filesystem reality
     fn enrich_status(&self, status: &mut LinkStatus) -> Result<()> {
-        // Ensure config_resolved_target is set (it might be None if only in State)
+        // Ensure config_resolved_target is set (it might be None if only in Lockfile)
         if status.config_resolved_target.is_none() {
             status.config_resolved_target = status.state_resolved_target.clone();
         }
@@ -275,7 +275,7 @@ impl Linker {
         if let Some(fs_type) = get_fs_type(&target_path)? {
             status.target_exists = true;
             status.target_type = Some(fs_type);
-            
+
             if fs_type == FsType::Symlink {
                 status.target_points_to = read_symlink_target(&target_path)?;
             }
@@ -291,7 +291,7 @@ impl Linker {
             .or(status.state_resolved_target.as_ref())
             .expect("Target must exist in either config or state");
 
-        // Case 1: Link is in State but NOT in Config -> Remove it
+        // Case 1: Link is in Lockfile but NOT in Config -> Remove it
         if status.config_resolved_source.is_none() {
             if let Some(stored) = &status.state_resolved_source {
                 return Some(LinkAction::Removed {
@@ -299,7 +299,7 @@ impl Linker {
                     source: stored.clone(),
                 });
             }
-            return None; // Should not happen (neither config nor state)
+            return None; // Should not happen (neither config nor lockfile)
         }
 
         let desired_source = status.config_resolved_source.as_ref().unwrap();
@@ -329,7 +329,7 @@ impl Linker {
 
         // Case 3: Link is Configured (and source exists)
 
-        // Subcase 3a: Not in State (New link)
+        // Subcase 3a: Not in Lockfile (New link)
         if status.state_resolved_source.is_none() {
             return Some(LinkAction::Created {
                 target: target.clone(),
@@ -339,7 +339,7 @@ impl Linker {
 
         let stored_source = status.state_resolved_source.as_ref().unwrap();
 
-        // Subcase 3b: In State, but source path changed
+        // Subcase 3b: In Lockfile, but source path changed
         if desired_source != stored_source {
             return Some(LinkAction::Updated {
                 target: target.clone(),
@@ -348,7 +348,7 @@ impl Linker {
             });
         }
 
-        // Subcase 3c: In State, source path same -> Check Reality
+        // Subcase 3c: In Lockfile, source path same -> Check Reality
         // Calculate absolute desired path for comparison
         let desired_abs = self
             .config_dir_or_cwd
@@ -400,8 +400,6 @@ impl Linker {
         }
     }
 
-
-
     /// Create a symlink (helper for execute_action)
     fn create_link(&self, source: &Utf8Path, target: &Utf8Path, dry_run: bool) -> Result<()> {
         // Create parent directory if needed
@@ -440,10 +438,10 @@ impl Linker {
     }
 
     /// Remove all symlinks managed by Doty
-    pub fn clean(&self, state: &DotyState, dry_run: bool) -> Result<Vec<LinkAction>> {
+    pub fn clean(&self, lockfile: &Lockfile, dry_run: bool) -> Result<Vec<LinkAction>> {
         let mut actions = Vec::new();
 
-        for (target, source) in &state.links {
+        for (target, source) in &lockfile.links {
             let target_path = resolve_target_path(target, &self.config_dir_or_cwd)?;
 
             // Check if the symlink exists (using symlink_metadata to handle broken symlinks)
@@ -464,8 +462,6 @@ impl Linker {
 
         Ok(actions)
     }
-
-
 
     /// Create a symlink
     fn create_symlink(&self, source: &Utf8Path, target: &Utf8Path) -> Result<()> {
@@ -574,13 +570,13 @@ mod tests {
         #[cfg(windows)]
         std::os::windows::fs::symlink_file(&zsh_source, &zshrc).unwrap();
 
-        // Create state with absolute paths
-        let mut state = DotyState::new("test-host".to_string(), config_dir_or_cwd.clone());
-        state.add_link(nvim_link.clone(), Utf8PathBuf::from("nvim"));
-        state.add_link(zshrc.clone(), Utf8PathBuf::from("zsh/.zshrc"));
+        // Create lockfile with absolute paths
+        let mut lockfile = Lockfile::new("test-host".to_string(), config_dir_or_cwd.clone());
+        lockfile.add_link(nvim_link.clone(), Utf8PathBuf::from("nvim"));
+        lockfile.add_link(zshrc.clone(), Utf8PathBuf::from("zsh/.zshrc"));
 
         let linker = Linker::new(config_dir_or_cwd.clone(), PathResolution::Config);
-        let actions = linker.clean(&state, false).unwrap();
+        let actions = linker.clean(&lockfile, false).unwrap();
 
         assert_eq!(actions.len(), 2);
 
@@ -603,11 +599,11 @@ mod tests {
         let zshrc = target_dir.join(".zshrc");
         fs::write(&zshrc, "# zshrc").unwrap();
 
-        let mut state = DotyState::new("test-host".to_string(), config_dir_or_cwd.clone());
-        state.add_link(zshrc.clone(), Utf8PathBuf::from("zsh/.zshrc"));
+        let mut lockfile = Lockfile::new("test-host".to_string(), config_dir_or_cwd.clone());
+        lockfile.add_link(zshrc.clone(), Utf8PathBuf::from("zsh/.zshrc"));
 
         let linker = Linker::new(config_dir_or_cwd.clone(), PathResolution::Config);
-        let actions = linker.clean(&state, true).unwrap();
+        let actions = linker.clean(&lockfile, true).unwrap();
 
         assert_eq!(actions.len(), 1);
 

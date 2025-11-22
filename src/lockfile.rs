@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-/// Represents the state of deployed symlinks on a specific machine
+/// Represents the lockfile of deployed symlinks on a specific machine
 #[derive(Debug, Clone, PartialEq)]
-pub struct DotyState {
+pub struct Lockfile {
     pub hostname: String,
     /// Lockfile format version for future compatibility
     pub lockfile_version: u32,
@@ -17,8 +17,8 @@ pub struct DotyState {
     pub links: HashMap<Utf8PathBuf, Utf8PathBuf>,
 }
 
-impl DotyState {
-    /// Create a new empty state for the given hostname and base path
+impl Lockfile {
+    /// Create a new empty lockfile for the given hostname and base path
     pub fn new(hostname: String, base_path: Utf8PathBuf) -> Self {
         Self {
             hostname,
@@ -28,21 +28,25 @@ impl DotyState {
         }
     }
 
-    /// Load state from directory, or create new if it doesn't exist
-    pub fn load<P: AsRef<Path>>(state_dir: P, hostname: &str, base_path: Utf8PathBuf) -> Result<Self> {
-        let state_file = state_dir.as_ref().join(format!("{}.kdl", hostname));
+    /// Load lockfile from directory, or create new if it doesn't exist
+    pub fn load<P: AsRef<Path>>(
+        lockfile_dir: P,
+        hostname: &str,
+        base_path: Utf8PathBuf,
+    ) -> Result<Self> {
+        let lockfile_path = lockfile_dir.as_ref().join(format!("{}.lock.kdl", hostname));
 
-        if !state_file.exists() {
+        if !lockfile_path.exists() {
             return Ok(Self::new(hostname.to_string(), base_path));
         }
 
-        let content = fs::read_to_string(&state_file)
-            .with_context(|| format!("Failed to read state file: {}", state_file.display()))?;
+        let content = fs::read_to_string(&lockfile_path)
+            .with_context(|| format!("Failed to read lockfile: {}", lockfile_path.display()))?;
 
         Self::from_str(&content, hostname)
     }
 
-    /// Parse state from KDL string
+    /// Parse lockfile from KDL string
     pub fn from_str(content: &str, hostname: &str) -> Result<Self> {
         let doc: KdlDocument = content
             .parse()
@@ -74,7 +78,7 @@ impl DotyState {
             }
         }
 
-        Ok(DotyState {
+        Ok(Lockfile {
             hostname: hostname.to_string(),
             lockfile_version,
             base_path,
@@ -108,22 +112,28 @@ impl DotyState {
         Ok((source, target))
     }
 
-    /// Save state to directory
-    pub fn save<P: AsRef<Path>>(&self, state_dir: P) -> Result<()> {
-        // Ensure state directory exists
-        fs::create_dir_all(&state_dir)
-            .with_context(|| format!("Failed to create state directory: {}", state_dir.as_ref().display()))?;
+    /// Save lockfile to directory
+    pub fn save<P: AsRef<Path>>(&self, lockfile_dir: P) -> Result<()> {
+        // Ensure lockfile directory exists
+        fs::create_dir_all(&lockfile_dir).with_context(|| {
+            format!(
+                "Failed to create lockfile directory: {}",
+                lockfile_dir.as_ref().display()
+            )
+        })?;
 
-        let state_file = state_dir.as_ref().join(format!("{}.kdl", self.hostname));
-        
+        let lockfile_path = lockfile_dir
+            .as_ref()
+            .join(format!("{}.lock.kdl", self.hostname));
+
         let content = self.to_kdl();
-        fs::write(&state_file, content)
-            .with_context(|| format!("Failed to write state file: {}", state_file.display()))?;
+        fs::write(&lockfile_path, content)
+            .with_context(|| format!("Failed to write lockfile: {}", lockfile_path.display()))?;
 
         Ok(())
     }
 
-    /// Convert state to KDL format
+    /// Convert Lockfile struct to KDL format string
     pub fn to_kdl(&self) -> String {
         let mut doc = KdlDocument::new();
 
@@ -152,12 +162,12 @@ impl DotyState {
         doc.to_string()
     }
 
-    /// Add a link to the state
+    /// Add a link to the lockfile
     pub fn add_link(&mut self, target: Utf8PathBuf, source: Utf8PathBuf) {
         self.links.insert(target, source);
     }
 
-    /// Remove a link from the state
+    /// Remove a link from the lockfile
     pub fn remove_link(&mut self, target: &Utf8Path) -> Option<Utf8PathBuf> {
         self.links.remove(target)
     }
@@ -180,47 +190,47 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn test_new_state() {
-        let state = DotyState::new("test-host".to_string(), Utf8PathBuf::from("/test/base"));
-        assert_eq!(state.hostname, "test-host");
-        assert_eq!(state.lockfile_version, 1);
-        assert_eq!(state.base_path, Utf8PathBuf::from("/test/base"));
-        assert_eq!(state.links.len(), 0);
+    fn test_new_lockfile() {
+        let lockfile = Lockfile::new("test-host".to_string(), Utf8PathBuf::from("/test/base"));
+        assert_eq!(lockfile.hostname, "test-host");
+        assert_eq!(lockfile.lockfile_version, 1);
+        assert_eq!(lockfile.base_path, Utf8PathBuf::from("/test/base"));
+        assert_eq!(lockfile.links.len(), 0);
     }
 
     #[test]
     fn test_add_remove_link() {
-        let mut state = DotyState::new("test-host".to_string(), Utf8PathBuf::from("/test/base"));
+        let mut lockfile = Lockfile::new("test-host".to_string(), Utf8PathBuf::from("/test/base"));
 
-        state.add_link(
+        lockfile.add_link(
             Utf8PathBuf::from("~/.config/nvim"),
             Utf8PathBuf::from("nvim"),
         );
 
-        assert!(state.is_managed(&Utf8PathBuf::from("~/.config/nvim")));
+        assert!(lockfile.is_managed(&Utf8PathBuf::from("~/.config/nvim")));
         assert_eq!(
-            state.get_source(&Utf8PathBuf::from("~/.config/nvim")),
+            lockfile.get_source(&Utf8PathBuf::from("~/.config/nvim")),
             Some(&Utf8PathBuf::from("nvim"))
         );
 
-        let removed = state.remove_link(&Utf8PathBuf::from("~/.config/nvim"));
+        let removed = lockfile.remove_link(&Utf8PathBuf::from("~/.config/nvim"));
         assert_eq!(removed, Some(Utf8PathBuf::from("nvim")));
-        assert!(!state.is_managed(&Utf8PathBuf::from("~/.config/nvim")));
+        assert!(!lockfile.is_managed(&Utf8PathBuf::from("~/.config/nvim")));
     }
 
     #[test]
     fn test_to_kdl() {
-        let mut state = DotyState::new("test-host".to_string(), Utf8PathBuf::from("/test/base"));
-        state.add_link(
+        let mut lockfile = Lockfile::new("test-host".to_string(), Utf8PathBuf::from("/test/base"));
+        lockfile.add_link(
             Utf8PathBuf::from("~/.config/nvim"),
             Utf8PathBuf::from("nvim"),
         );
-        state.add_link(
+        lockfile.add_link(
             Utf8PathBuf::from("~/.zshrc"),
             Utf8PathBuf::from("zsh/.zshrc"),
         );
 
-        let kdl = state.to_kdl();
+        let kdl = lockfile.to_kdl();
         assert!(kdl.contains("lockfileVersion 1"));
         assert!(kdl.contains("basePath \"/test/base\""));
         assert!(kdl.contains("link"));
@@ -239,31 +249,31 @@ mod tests {
             link source="zsh/.zshrc" target="~/.zshrc"
         "#;
 
-        let state = DotyState::from_str(kdl, "test-host").unwrap();
-        assert_eq!(state.hostname, "test-host");
-        assert_eq!(state.lockfile_version, 1);
-        assert_eq!(state.base_path, Utf8PathBuf::from("/test/base"));
-        assert_eq!(state.links.len(), 2);
-        assert!(state.is_managed(&Utf8PathBuf::from("~/.config/nvim")));
-        assert!(state.is_managed(&Utf8PathBuf::from("~/.zshrc")));
+        let lockfile = Lockfile::from_str(kdl, "test-host").unwrap();
+        assert_eq!(lockfile.hostname, "test-host");
+        assert_eq!(lockfile.lockfile_version, 1);
+        assert_eq!(lockfile.base_path, Utf8PathBuf::from("/test/base"));
+        assert_eq!(lockfile.links.len(), 2);
+        assert!(lockfile.is_managed(&Utf8PathBuf::from("~/.config/nvim")));
+        assert!(lockfile.is_managed(&Utf8PathBuf::from("~/.zshrc")));
     }
 
     #[test]
     fn test_roundtrip() {
-        let mut state = DotyState::new("test-host".to_string(), Utf8PathBuf::from("/test/base"));
-        state.add_link(
+        let mut lockfile = Lockfile::new("test-host".to_string(), Utf8PathBuf::from("/test/base"));
+        lockfile.add_link(
             Utf8PathBuf::from("~/.config/nvim"),
             Utf8PathBuf::from("nvim"),
         );
-        state.add_link(
+        lockfile.add_link(
             Utf8PathBuf::from("~/.zshrc"),
             Utf8PathBuf::from("zsh/.zshrc"),
         );
 
-        let kdl = state.to_kdl();
-        let parsed = DotyState::from_str(&kdl, "test-host").unwrap();
+        let kdl = lockfile.to_kdl();
+        let parsed = Lockfile::from_str(&kdl, "test-host").unwrap();
 
-        assert_eq!(state, parsed);
+        assert_eq!(lockfile, parsed);
     }
 
     // Integration tests with real filesystem
@@ -271,25 +281,26 @@ mod tests {
     fn test_save_and_load_real_fs() {
         let test_dir = "tests/tmpfs/test_save_and_load_real_fs";
         let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
-        let state_dir = format!("{}/.doty/state", test_dir);
+        let lockfile_dir = format!("{}/.doty/state", test_dir);
 
-        let mut state = DotyState::new("test-host".to_string(), Utf8PathBuf::from("/test/base"));
-        state.add_link(
+        let mut lockfile = Lockfile::new("test-host".to_string(), Utf8PathBuf::from("/test/base"));
+        lockfile.add_link(
             Utf8PathBuf::from("~/.config/nvim"),
             Utf8PathBuf::from("nvim"),
         );
-        state.add_link(
+        lockfile.add_link(
             Utf8PathBuf::from("~/.zshrc"),
             Utf8PathBuf::from("zsh/.zshrc"),
         );
 
-        // Save state
-        state.save(&state_dir).unwrap();
+        // Save lockfile
+        lockfile.save(&lockfile_dir).unwrap();
 
-        // Load state
-        let loaded = DotyState::load(&state_dir, "test-host", Utf8PathBuf::from("/test/base")).unwrap();
+        // Load lockfile
+        let loaded =
+            Lockfile::load(&lockfile_dir, "test-host", Utf8PathBuf::from("/test/base")).unwrap();
 
-        assert_eq!(state, loaded);
+        assert_eq!(lockfile, loaded);
 
         // Clean up
         let _ = fs::remove_dir_all(test_dir);
@@ -299,14 +310,15 @@ mod tests {
     fn test_load_real_fs_nonexistent() {
         let test_dir = "tests/tmpfs/test_load_real_fs_nonexistent";
         let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
-        let state_dir = format!("{}/.doty/state", test_dir);
+        let lockfile_dir = format!("{}/.doty/state", test_dir);
 
-        // Loading non-existent state should return empty state
-        let state = DotyState::load(&state_dir, "test-host", Utf8PathBuf::from("/test/base")).unwrap();
-        assert_eq!(state.hostname, "test-host");
-        assert_eq!(state.lockfile_version, 1);
-        assert_eq!(state.base_path, Utf8PathBuf::from("/test/base"));
-        assert_eq!(state.links.len(), 0);
+        // Loading non-existent lockfile should return empty lockfile
+        let lockfile =
+            Lockfile::load(&lockfile_dir, "test-host", Utf8PathBuf::from("/test/base")).unwrap();
+        assert_eq!(lockfile.hostname, "test-host");
+        assert_eq!(lockfile.lockfile_version, 1);
+        assert_eq!(lockfile.base_path, Utf8PathBuf::from("/test/base"));
+        assert_eq!(lockfile.links.len(), 0);
 
         // Clean up
         let _ = fs::remove_dir_all(test_dir);
@@ -316,51 +328,53 @@ mod tests {
     fn test_save_real_fs_creates_directory() {
         let test_dir = "tests/tmpfs/test_save_real_fs_creates_directory";
         let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
-        let state_dir = format!("{}/.doty/state", test_dir);
+        let lockfile_dir = format!("{}/.doty/state", test_dir);
 
-        let state = DotyState::new("test-host".to_string(), Utf8PathBuf::from("/test/base"));
-        
+        let lockfile = Lockfile::new("test-host".to_string(), Utf8PathBuf::from("/test/base"));
+
         // Directory doesn't exist yet
-        assert!(!Path::new(&state_dir).exists());
+        assert!(!Path::new(&lockfile_dir).exists());
 
         // Save should create directory
-        state.save(&state_dir).unwrap();
+        lockfile.save(&lockfile_dir).unwrap();
 
         // Directory should now exist
-        assert!(Path::new(&state_dir).exists());
+        assert!(Path::new(&lockfile_dir).exists());
 
         // Clean up
         let _ = fs::remove_dir_all(test_dir);
     }
 
     #[test]
-    fn test_real_fs_roundtrip_multiple_states() {
-        let test_dir = "tests/tmpfs/test_real_fs_roundtrip_multiple_states";
+    fn test_real_fs_roundtrip_multiple_lockfiles() {
+        let test_dir = "tests/tmpfs/test_real_fs_roundtrip_multiple_lockfiles";
         let _ = fs::remove_dir_all(test_dir); // Clean up any existing test dir
-        let state_dir = format!("{}/.doty/state", test_dir);
+        let lockfile_dir = format!("{}/.doty/state", test_dir);
 
-        // Create and save state for host1
-        let mut state1 = DotyState::new("host1".to_string(), Utf8PathBuf::from("/test/base1"));
-        state1.add_link(
+        // Create and save lockfile for host1
+        let mut lockfile1 = Lockfile::new("host1".to_string(), Utf8PathBuf::from("/test/base1"));
+        lockfile1.add_link(
             Utf8PathBuf::from("~/.config/nvim"),
             Utf8PathBuf::from("nvim"),
         );
-        state1.save(&state_dir).unwrap();
+        lockfile1.save(&lockfile_dir).unwrap();
 
-        // Create and save state for host2
-        let mut state2 = DotyState::new("host2".to_string(), Utf8PathBuf::from("/test/base2"));
-        state2.add_link(
+        // Create and save lockfile for host2
+        let mut lockfile2 = Lockfile::new("host2".to_string(), Utf8PathBuf::from("/test/base2"));
+        lockfile2.add_link(
             Utf8PathBuf::from("~/.zshrc"),
             Utf8PathBuf::from("zsh/.zshrc"),
         );
-        state2.save(&state_dir).unwrap();
+        lockfile2.save(&lockfile_dir).unwrap();
 
-        // Load both states
-        let loaded1 = DotyState::load(&state_dir, "host1", Utf8PathBuf::from("/test/base1")).unwrap();
-        let loaded2 = DotyState::load(&state_dir, "host2", Utf8PathBuf::from("/test/base2")).unwrap();
+        // Load both lockfiles
+        let loaded1 =
+            Lockfile::load(&lockfile_dir, "host1", Utf8PathBuf::from("/test/base1")).unwrap();
+        let loaded2 =
+            Lockfile::load(&lockfile_dir, "host2", Utf8PathBuf::from("/test/base2")).unwrap();
 
-        assert_eq!(state1, loaded1);
-        assert_eq!(state2, loaded2);
+        assert_eq!(lockfile1, loaded1);
+        assert_eq!(lockfile2, loaded2);
 
         // Clean up
         let _ = fs::remove_dir_all(test_dir);
