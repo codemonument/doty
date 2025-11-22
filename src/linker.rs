@@ -38,6 +38,31 @@ pub enum LinkAction {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum FsType {
+    File,
+    Directory,
+    Symlink,
+}
+
+#[derive(Debug, Clone)]
+struct LinkStatus {
+    // Config (Desired state)
+    config_resolved_source: Option<Utf8PathBuf>,
+    config_resolved_target: Option<Utf8PathBuf>,
+    config_is_explicit: bool,
+
+    // State (Stored cache)
+    state_resolved_source: Option<Utf8PathBuf>,
+    state_resolved_target: Option<Utf8PathBuf>,
+
+    // Filesystem (Reality)
+    source_exists: bool,         //checked via config_resolved_source
+    target_exists: bool,         //checked via target_points_to
+    target_type: Option<FsType>, //checked via target_points_to
+    target_points_to: Option<Utf8PathBuf>,
+}
+
 /// The Linker handles creating and managing symlinks
 pub struct Linker {
     /// Root directory for resolving relative paths (already resolved based on path_resolution strategy)
@@ -63,129 +88,260 @@ impl Linker {
         state: &DotyState,
         force: bool,
     ) -> Result<Vec<LinkAction>> {
-        let mut actions = Vec::new();
-        
-        // Step 1: Build desired links from config and identify explicit sources
-        let mut desired_links: HashMap<Utf8PathBuf, Utf8PathBuf> = HashMap::new();
-        let mut explicit_sources: HashSet<Utf8PathBuf> = HashSet::new();
-        let mut processed_targets: HashSet<Utf8PathBuf> = HashSet::new();
+        let link_states = self.gather_link_states(config, state)?;
+        Ok(self.determine_actions(link_states, force))
+    }
 
-        // First pass: identify all explicit sources
+    /// Gather information about all relevant targets from Config, State, and Filesystem
+    fn gather_link_states(
+        &self,
+        config: &DotyConfig,
+        state: &DotyState,
+    ) -> Result<HashMap<Utf8PathBuf, LinkStatus>> {
+        let mut link_states: HashMap<Utf8PathBuf, LinkStatus> = HashMap::new();
+        let mut explicit_sources: HashSet<Utf8PathBuf> = HashSet::new();
+
+        // 1. Identify explicit sources
         for package in &config.packages {
             explicit_sources.insert(package.source.clone());
         }
 
-        // Second pass: process each package
+        // 2. Process Config (Desired State)
         for package in &config.packages {
             let source_path = self.config_dir_or_cwd.join(&package.source);
-            
-            if source_path.exists() {
+            let source_exists = source_path.exists();
+
+            if source_exists {
                 if source_path.is_file() {
-                    // Single file link (explicit)
-                    desired_links.insert(package.target.clone(), package.source.clone());
+                    self.add_config_status(
+                        &mut link_states,
+                        package.target.clone(),
+                        package.source.clone(),
+                        true, // explicit
+                        true, // exists
+                    )?;
                 } else if source_path.is_dir() {
-                    // Directory link
                     match package.strategy {
                         LinkStrategy::LinkFolder => {
-                            // Folder itself is explicit
-                            desired_links.insert(package.target.clone(), package.source.clone());
+                            self.add_config_status(
+                                &mut link_states,
+                                package.target.clone(),
+                                package.source.clone(),
+                                true, // explicit
+                                true, // exists
+                            )?;
                         }
                         LinkStrategy::LinkFilesRecursive => {
-                            // Scan and add all files (these are implicit)
                             for file in self.scan_directory_recursive(&source_path)? {
                                 let relative = file.strip_prefix(&source_path)?;
                                 let target_path = package.target.join(relative);
                                 let source_rel = package.source.join(relative);
-                                desired_links.insert(target_path, source_rel);
+                                self.add_config_status(
+                                    &mut link_states,
+                                    target_path,
+                                    source_rel,
+                                    false, // implicit
+                                    true,  // exists
+                                )?;
                             }
                         }
                     }
                 }
             } else {
-                // Source doesn't exist - check if explicit
+                // Source doesn't exist
                 if self.is_explicit(&package.source, &explicit_sources) {
-                    if force {
-                        // Treat as removal - don't add to desired_links
-                        // Mark as processed to prevent duplicate removal in Step 2
-                        processed_targets.insert(package.target.clone());
-                        if let Some(source) = state.links.get(&package.target) {
-                            actions.push(LinkAction::Removed {
-                                target: package.target.clone(),
-                                source: source.clone(),
+                    self.add_config_status(
+                        &mut link_states,
+                        package.target.clone(),
+                        package.source.clone(),
+                        true,  // explicit
+                        false, // !exists
+                    )?;
+                }
+            }
+        }
+
+        // 3. Process State (Stored State)
+        for (target, source) in &state.links {
+            let status = link_states
+                .entry(target.clone())
+                .or_insert_with(|| LinkStatus {
+                    config_resolved_source: None,
+                    config_resolved_target: None, // Will be filled in step 4 if not already
+                    config_is_explicit: false,
+                    state_resolved_source: None,
+                    state_resolved_target: Some(target.clone()),
+                    source_exists: false,
+                    target_exists: false,
+                    target_type: None,
+                    target_points_to: None,
+                });
+            status.state_resolved_source = Some(source.clone());
+            status.state_resolved_target = Some(target.clone());
+        }
+
+        // 4. Process Reality (Filesystem)
+        for (target, status) in link_states.iter_mut() {
+            // Ensure config_resolved_target is set (it might be None if only in State)
+            if status.config_resolved_target.is_none() {
+                status.config_resolved_target = Some(target.clone());
+            }
+
+            let target_path = self.resolve_target_path(target)?;
+
+            if let Ok(metadata) = fs::symlink_metadata(&target_path) {
+                status.target_exists = true;
+                if metadata.is_symlink() {
+                    status.target_type = Some(FsType::Symlink);
+                    if let Ok(target) = fs::read_link(&target_path) {
+                        if let Ok(canonical) = target.canonicalize() {
+                            status.target_points_to =
+                                Some(Utf8PathBuf::from_path_buf(canonical).unwrap_or_default());
+                        }
+                    }
+                } else if metadata.is_dir() {
+                    status.target_type = Some(FsType::Directory);
+                } else {
+                    status.target_type = Some(FsType::File);
+                }
+            }
+        }
+
+        Ok(link_states)
+    }
+
+    /// Helper to update status with desired info
+    fn add_config_status(
+        &self,
+        link_states: &mut HashMap<Utf8PathBuf, LinkStatus>,
+        target: Utf8PathBuf,
+        source_rel: Utf8PathBuf,
+        is_explicit: bool,
+        source_exists: bool,
+    ) -> Result<()> {
+        let status = link_states
+            .entry(target.clone())
+            .or_insert_with(|| LinkStatus {
+                config_resolved_source: None,
+                config_resolved_target: None,
+                config_is_explicit: false,
+                state_resolved_source: None,
+                state_resolved_target: None,
+                source_exists: false,
+                target_exists: false,
+                target_type: None,
+                target_points_to: None,
+            });
+
+        status.config_resolved_source = Some(source_rel);
+        status.config_resolved_target = Some(target);
+        status.config_is_explicit = is_explicit;
+        status.source_exists = source_exists;
+        Ok(())
+    }
+
+    /// Determine actions based on gathered status
+    fn determine_actions(
+        &self,
+        statuses: HashMap<Utf8PathBuf, LinkStatus>,
+        force: bool,
+    ) -> Vec<LinkAction> {
+        let mut actions = Vec::new();
+
+        for status in statuses.values() {
+            // We use the target from the map key (which is in config_resolved_target or state_resolved_target)
+            let target = status
+                .config_resolved_target
+                .as_ref()
+                .or(status.state_resolved_target.as_ref())
+                .expect("Target must exist in either config or state");
+
+            match (
+                &status.config_resolved_source,
+                &status.state_resolved_source,
+            ) {
+                // Case 1: Configured & Stored
+                (Some(desired), Some(stored)) => {
+                    if !status.source_exists {
+                        if status.config_is_explicit {
+                            if force {
+                                actions.push(LinkAction::Removed {
+                                    target: target.clone(),
+                                    source: stored.clone(),
+                                });
+                            } else {
+                                actions.push(LinkAction::Warning {
+                                    target: target.clone(),
+                                    source: desired.clone(),
+                                    message: "Source file gone, remove from config if intentional"
+                                        .to_string(),
+                                });
+                            }
+                        }
+                    } else if desired != stored {
+                        actions.push(LinkAction::Updated {
+                            target: target.clone(),
+                            old_source: stored.clone(),
+                            new_source: desired.clone(),
+                        });
+                    } else {
+                        // Same source, check reality
+                        // Calculate absolute desired path for comparison
+                        let desired_abs = self
+                            .config_dir_or_cwd
+                            .join(desired)
+                            .canonicalize()
+                            .map(|p| Utf8PathBuf::from_path_buf(p).unwrap_or_default())
+                            .unwrap_or_else(|_| self.config_dir_or_cwd.join(desired));
+
+                        let is_correct = if let Some(actual) = &status.target_points_to {
+                            *actual == desired_abs
+                        } else {
+                            false
+                        };
+
+                        if is_correct {
+                            actions.push(LinkAction::Skipped {
+                                target: target.clone(),
+                                source: desired.clone(),
+                            });
+                        } else {
+                            actions.push(LinkAction::Created {
+                                target: target.clone(),
+                                source: desired.clone(),
                             });
                         }
-                    } else {
-                        // Warn - but keep in desired_links to prevent removal in Step 2
-                        // Mark as processed so Step 3 skips it
-                        desired_links.insert(package.target.clone(), package.source.clone());
-                        processed_targets.insert(package.target.clone());
-                        actions.push(LinkAction::Warning {
-                            target: package.target.clone(),
-                            source: package.source.clone(),
-                            message: "Source file gone, remove from config if intentional".to_string(),
-                        });
                     }
                 }
-            }
-        }
-
-        // Step 2: Find links to remove (in state but not in desired)
-        for (target, source) in &state.links {
-            // Skip if already processed (e.g., forced removal in Step 1)
-            if processed_targets.contains(target) {
-                continue;
-            }
-            
-            if !desired_links.contains_key(target) {
-                actions.push(LinkAction::Removed {
-                    target: target.clone(),
-                    source: source.clone(),
-                });
-            }
-        }
-
-        // Step 3: Find links to create/update/skip
-        for (target, source) in &desired_links {
-            // Skip targets that were already processed (warnings or forced removals)
-            if processed_targets.contains(target) {
-                continue;
-            }
-            
-            if let Some(old_source) = state.links.get(target) {
-                if old_source != source {
-                    // Source changed
-                    actions.push(LinkAction::Updated {
-                        target: target.clone(),
-                        old_source: old_source.clone(),
-                        new_source: source.clone(),
-                    });
-                } else {
-                    // Check if symlink is correct
-                    let target_path = self.resolve_target_path(target)?;
-                    let source_path = self.config_dir_or_cwd.join(source);
-                    if self.is_symlink_to(&target_path, &source_path)? {
-                        actions.push(LinkAction::Skipped {
-                            target: target.clone(),
-                            source: source.clone(),
-                        });
-                    } else {
-                        // Symlink broken or incorrect, recreate
+                // Case 2: Configured Only (New)
+                (Some(desired), None) => {
+                    if status.source_exists {
                         actions.push(LinkAction::Created {
                             target: target.clone(),
-                            source: source.clone(),
+                            source: desired.clone(),
+                        });
+                    } else if status.config_is_explicit {
+                        actions.push(LinkAction::Warning {
+                            target: target.clone(),
+                            source: desired.clone(),
+                            message: "Source file gone, remove from config if intentional"
+                                .to_string(),
                         });
                     }
                 }
-            } else {
-                // New link
-                actions.push(LinkAction::Created {
-                    target: target.clone(),
-                    source: source.clone(),
-                });
+                // Case 3: Stored Only (Removed)
+                (None, Some(stored)) => {
+                    actions.push(LinkAction::Removed {
+                        target: target.clone(),
+                        source: stored.clone(),
+                    });
+                }
+                // Case 4: Neither (Impossible)
+                (None, None) => {}
             }
         }
 
-        Ok(actions)
+        actions
     }
 
     /// Execute a single action
@@ -200,7 +356,9 @@ impl Linker {
                 let target_path = self.resolve_target_path(target)?;
                 self.remove_link(&target_path, dry_run)
             }
-            LinkAction::Updated { target, new_source, .. } => {
+            LinkAction::Updated {
+                target, new_source, ..
+            } => {
                 let target_path = self.resolve_target_path(target)?;
                 let new_source_path = self.config_dir_or_cwd.join(new_source);
                 self.remove_link(&target_path, dry_run)?;
@@ -219,19 +377,19 @@ impl Linker {
     /// Scan directory recursively and return all files
     fn scan_directory_recursive(&self, dir: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
         let mut files = Vec::new();
-        
+
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let entry_path = Utf8PathBuf::from_path_buf(entry.path())
                 .map_err(|_| anyhow::anyhow!("Path contains invalid UTF-8"))?;
-            
+
             if entry_path.is_dir() {
                 files.extend(self.scan_directory_recursive(&entry_path)?);
             } else {
                 files.push(entry_path);
             }
         }
-        
+
         Ok(files)
     }
 
@@ -272,8 +430,6 @@ impl Linker {
         Ok(())
     }
 
-    
-
     /// Remove all symlinks managed by Doty
     pub fn clean(&self, state: &DotyState, dry_run: bool) -> Result<Vec<LinkAction>> {
         let mut actions = Vec::new();
@@ -300,76 +456,26 @@ impl Linker {
         Ok(actions)
     }
 
-    /// Check if target path or any of its parents is a symlink
-    /// This prevents creating symlinks inside directories that are themselves symlinks
-    fn check_target_path_conflicts(&self, target_path: &Utf8Path) -> Result<()> {
-        // Check each parent directory to see if it's a symlink
-        let mut current = target_path;
-        
-        while let Some(parent) = current.parent() {
-            if parent.as_str().is_empty() || parent.as_str() == "/" {
-                break;
-            }
-            
-            // Check if this parent exists and is a symlink
-            if let Ok(metadata) = fs::symlink_metadata(parent) {
-                if metadata.is_symlink() {
-                    anyhow::bail!(
-                        "Parent directory '{}' is a symlink (created by LinkFolder)",
-                        parent
-                    );
-                }
-            }
-            
-            current = parent;
-        }
-        
-        Ok(())
-    }
-
     /// Resolve a target path (handle ~ expansion, absolute paths, and relative paths)
     fn resolve_target_path(&self, target: &Utf8Path) -> Result<Utf8PathBuf> {
         let path_str = target.as_str();
-        
+
         // Handle ~ expansion (relative to HOME)
         if let Some(stripped) = path_str.strip_prefix("~/") {
-            let home_dir = std::env::var("HOME")
-                .context("HOME environment variable not set")?;
+            let home_dir = std::env::var("HOME").context("HOME environment variable not set")?;
             return Ok(Utf8PathBuf::from(home_dir).join(stripped));
         } else if path_str == "~" {
-            let home_dir = std::env::var("HOME")
-                .context("HOME environment variable not set")?;
+            let home_dir = std::env::var("HOME").context("HOME environment variable not set")?;
             return Ok(Utf8PathBuf::from(home_dir));
         }
-        
+
         // Handle absolute paths
         if target.is_absolute() {
             return Ok(target.to_path_buf());
         }
-        
+
         // Handle relative paths - config_dir_or_cwd already contains the resolved directory
         Ok(self.config_dir_or_cwd.join(target))
-    }
-
-    /// Check if a path is a symlink pointing to the expected target
-    fn is_symlink_to(&self, link_path: &Utf8Path, expected_target: &Utf8Path) -> Result<bool> {
-        // Check if it's a symlink using std::fs::symlink_metadata
-        if let Ok(metadata) = fs::symlink_metadata(link_path) {
-            if metadata.is_symlink() {
-                // Read the symlink target
-                if let Ok(target) = fs::read_link(link_path) {
-                    // Compare with expected target
-                    if let Ok(target_canonical) = target.canonicalize() {
-                        if let Ok(expected_canonical) = expected_target.as_std_path().canonicalize()
-                        {
-                            return Ok(target_canonical == expected_canonical);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(false)
     }
 
     /// Create a symlink
@@ -431,11 +537,11 @@ mod tests {
     fn setup_test_fs(test_name: &str) -> Utf8PathBuf {
         let test_dir = format!("tests/tmpfs/{}", test_name);
         let _ = fs::remove_dir_all(&test_dir); // Clean up any existing test dir
-        
+
         let config_dir_or_cwd = format!("{}/repo", test_dir);
-        
+
         fs::create_dir_all(&config_dir_or_cwd).unwrap();
-        
+
         // Convert to absolute path
         let cwd = std::env::current_dir().unwrap();
         let absolute_config_dir_or_cwd = cwd.join(&config_dir_or_cwd);
@@ -522,6 +628,4 @@ mod tests {
         // Clean up
         let _ = fs::remove_dir_all(format!("tests/tmpfs/test_clean_dry_run"));
     }
-
-    
 }
