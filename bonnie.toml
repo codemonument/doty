@@ -19,3 +19,6 @@ version = "0.3.2"
     pg-i.description      = "Run the doty CLI with the playground config"
     pg-detect.cmd         = "cargo run -- detect -c playground/doty.kdl %%"
     pg-detect.description = "Detect drift in the playground config"
+
+    # cargo shortcuts 
+    test = "cargo test %%"

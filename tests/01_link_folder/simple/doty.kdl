@@ -1,0 +1,9 @@
+defaults {
+    // This makes the path resolution relative to the doty.kdl file location
+    pathResolution "config"
+}
+
+LinkFolder "source/dummy" {
+    target "target/dummy"
+}
+
