@@ -69,7 +69,8 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> 
             LinkAction::Created { target, .. }
             | LinkAction::Updated { target, .. }
             | LinkAction::Skipped { target, .. }
-            | LinkAction::Warning { target, .. } => {
+            | LinkAction::Warning { target, .. }
+            | LinkAction::Pruned { target, .. } => {
                 // Find which package this target belongs to
                 let mut found_package = false;
                 for package in &config.packages {
@@ -161,6 +162,10 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> 
                 LinkAction::Removed { target, source } => {
                     println!("  {} {} → {}", "[-]".red().bold(), target, source);
                 }
+                LinkAction::Pruned { target, source } => {
+                    println!("  {} {} → {}", "[x]".red().bold(), target, source);
+                    println!("      Pruned: Source missing, dangling link removal");
+                }
                 LinkAction::Warning {
                     target,
                     source,
@@ -204,6 +209,9 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> 
                 LinkAction::Removed { target, .. } => {
                     lockfile.remove_link(target);
                 }
+                LinkAction::Pruned { target, .. } => {
+                    lockfile.remove_link(target);
+                }
                 LinkAction::Warning { .. } | LinkAction::Skipped { .. } => {
                     // Don't modify lockfile for warnings or skipped links
                 }
@@ -242,12 +250,16 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> 
         .iter()
         .filter(|a| matches!(a, LinkAction::Removed { .. }))
         .count();
+    let pruned = actions
+        .iter()
+        .filter(|a| matches!(a, LinkAction::Pruned { .. }))
+        .count();
     let warnings = actions
         .iter()
         .filter(|a| matches!(a, LinkAction::Warning { .. }))
         .count();
 
-    if created > 0 || updated > 0 || removed > 0 || warnings > 0 {
+    if created > 0 || updated > 0 || removed > 0 || pruned > 0 || warnings > 0 {
         println!("\n{}", "Summary:".bold());
         if created > 0 {
             println!(
@@ -268,6 +280,13 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> 
                 "  {} {} removed",
                 "[-]".red().bold(),
                 pluralize("link", removed as isize, true)
+            );
+        }
+        if pruned > 0 {
+            println!(
+                "  {} {} pruned",
+                "[x]".red().bold(),
+                pluralize("link", pruned as isize, true)
             );
         }
         if warnings > 0 {

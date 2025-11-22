@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 mod test_lib;
-use test_lib::cli_test_utils::{is_symlink_to, run_doty_link};
+use test_lib::cli_test_utils::{is_symlink_to, run_doty_link, run_doty_link_dry_run};
 
 /// Test case: Link one folder (source/dummy) to another folder (target/dummy)
 /// Context:
@@ -140,24 +140,52 @@ fn test_01_link_folder_src_gone() {
         "dummy.txt should not be accessible through broken symlink"
     );
 
-    // Step 8: Run doty link again - should warn but not crash
-    let output =
-        run_doty_link(&config_path).expect("doty link should succeed even with missing source");
+    // Step 8: Run doty link --dry-run - should detect broken symlink and schedule cleanup
+    let output = run_doty_link_dry_run(&config_path)
+        .expect("doty link --dry-run should succeed even with missing source");
 
-    // Step 9: Validate warning is present in output
+    // Step 9: Validate Pruned action is present in output
     assert!(
-        output.contains("Source (file|dir) gone"),
-        "Output should contain warning about missing source"
+        output.contains("[x]"),
+        "Output should contain [x] icon for Pruned action"
+    );
+    assert!(
+        output.contains("Pruned: Source missing, dangling link removal"),
+        "Output should contain Pruned message"
+    );
+    assert!(
+        output.contains("target/dummy"),
+        "Output should mention the target path"
     );
 
-    // Step 10: Validate symlink still exists (not removed)
+    // Step 10: Validate symlink still exists (dry-run must not change disk)
     // Use symlink_metadata to check if symlink exists even when broken
     assert!(
         fs::symlink_metadata(&expected_symlink).is_ok(),
-        "Symlink 'dummy' should still exist after running doty link with missing source"
+        "Symlink 'dummy' should still exist after dry-run (dry-run must not change disk)"
     );
     assert!(
         expected_symlink.is_symlink(),
         "Symlink 'dummy' should still be a symlink"
+    );
+
+    // Step 11: Run doty link (without dry-run) - should actually remove the broken symlink
+    let output =
+        run_doty_link(&config_path).expect("doty link should succeed even with missing source");
+
+    // Step 12: Validate Pruned action is present in output
+    assert!(
+        output.contains("[x]"),
+        "Output should contain [x] icon for Pruned action"
+    );
+    assert!(
+        output.contains("Pruned: Source missing, dangling link removal"),
+        "Output should contain Pruned message"
+    );
+
+    // Step 13: Validate symlink was removed
+    assert!(
+        !fs::symlink_metadata(&expected_symlink).is_ok(),
+        "Symlink 'dummy' should be removed after running doty link"
     );
 }

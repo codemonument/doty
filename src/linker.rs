@@ -33,6 +33,11 @@ pub enum LinkAction {
         target: Utf8PathBuf,
         source: Utf8PathBuf,
     },
+    /// A broken symlink was pruned (source missing, dangling link removal)
+    Pruned {
+        target: Utf8PathBuf,
+        source: Utf8PathBuf,
+    },
     /// A warning about a broken explicit link
     Warning {
         target: Utf8PathBuf,
@@ -186,10 +191,14 @@ impl Linker {
         let source_path = self.config_dir_or_cwd.join(&package.source);
         let mut results = Vec::new();
 
+        // Resolve target to absolute path for use as HashMap key (lockfile uses absolute paths)
+        let resolved_target = resolve_target_path(&package.target, &self.config_dir_or_cwd)
+            .unwrap_or_else(|_| self.config_dir_or_cwd.join(&package.target));
+
         if !source_path.exists() {
             // Explicit missing source
             results.push((
-                package.target.clone(),
+                resolved_target.clone(),
                 LinkStatus::from_config(
                     package.target.clone(),
                     package.source.clone(),
@@ -202,7 +211,7 @@ impl Linker {
 
         if source_path.is_file() {
             results.push((
-                package.target.clone(),
+                resolved_target.clone(),
                 LinkStatus::from_config(
                     package.target.clone(),
                     package.source.clone(),
@@ -214,7 +223,7 @@ impl Linker {
             match package.strategy {
                 LinkStrategy::LinkFolder => {
                     results.push((
-                        package.target.clone(),
+                        resolved_target.clone(),
                         LinkStatus::from_config(
                             package.target.clone(),
                             package.source.clone(),
@@ -229,8 +238,13 @@ impl Linker {
                             if let Ok(relative) = file.strip_prefix(&source_path) {
                                 let target_path = package.target.join(relative);
                                 let source_rel = package.source.join(relative);
+                                let resolved_target_path =
+                                    resolve_target_path(&target_path, &self.config_dir_or_cwd)
+                                        .unwrap_or_else(|_| {
+                                            self.config_dir_or_cwd.join(&target_path)
+                                        });
                                 results.push((
-                                    target_path.clone(),
+                                    resolved_target_path,
                                     LinkStatus::from_config(
                                         target_path,
                                         source_rel,
@@ -311,7 +325,25 @@ impl Linker {
             }
 
             // Explicit source missing
-            if force && status.state_resolved_source.is_some() {
+            // Check if target is a broken symlink that needs cleanup
+            // A broken symlink is detected when: target_type is Symlink but target_points_to is None
+            // (target_exists is true if get_fs_type succeeded, which it does for broken symlinks)
+            let is_broken_symlink =
+                status.target_type == Some(FsType::Symlink) && status.target_points_to.is_none();
+
+            if is_broken_symlink {
+                // Broken symlink with missing source - schedule for cleanup
+                // Use state_resolved_source if available (from lockfile), otherwise use desired_source (from config)
+                let source = status
+                    .state_resolved_source
+                    .as_ref()
+                    .unwrap_or(desired_source)
+                    .clone();
+                return Some(LinkAction::Pruned {
+                    target: target.clone(),
+                    source,
+                });
+            } else if force && status.state_resolved_source.is_some() {
                 // If forced and we tracked it before, remove it
                 return Some(LinkAction::Removed {
                     target: target.clone(),
@@ -397,6 +429,11 @@ impl Linker {
                 let target_path = resolve_target_path(target, &self.config_dir_or_cwd)?;
                 self.remove_link(&target_path, dry_run)
             }
+            LinkAction::Pruned { target, .. } => {
+                // Pruned actions remove broken symlinks (same as Removed)
+                let target_path = resolve_target_path(target, &self.config_dir_or_cwd)?;
+                self.remove_link(&target_path, dry_run)
+            }
             LinkAction::Updated {
                 target, new_source, ..
             } => {
@@ -436,11 +473,21 @@ impl Linker {
 
     /// Remove a symlink (helper for execute_action)
     fn remove_link(&self, target: &Utf8Path, dry_run: bool) -> Result<()> {
-        if target.exists() && !dry_run {
-            if target.is_dir() {
-                fs::remove_dir_all(target)?;
-            } else {
-                fs::remove_file(target)?;
+        if !dry_run {
+            // Use symlink_metadata to handle broken symlinks (exists() returns false for broken symlinks)
+            if let Ok(metadata) = fs::symlink_metadata(target) {
+                if metadata.is_dir() {
+                    fs::remove_dir_all(target)?;
+                } else {
+                    fs::remove_file(target)?;
+                }
+            } else if target.exists() {
+                // Fallback for non-symlink files/directories
+                if target.is_dir() {
+                    fs::remove_dir_all(target)?;
+                } else {
+                    fs::remove_file(target)?;
+                }
             }
         }
         Ok(())
