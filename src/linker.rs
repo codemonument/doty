@@ -63,6 +63,54 @@ struct LinkStatus {
     target_points_to: Option<Utf8PathBuf>,
 }
 
+impl LinkStatus {
+    fn from_config(
+        target: Utf8PathBuf,
+        source: Utf8PathBuf,
+        is_explicit: bool,
+        source_exists: bool,
+    ) -> Self {
+        Self {
+            config_resolved_source: Some(source),
+            config_resolved_target: Some(target),
+            config_is_explicit: is_explicit,
+            state_resolved_source: None,
+            state_resolved_target: None,
+            source_exists,
+            target_exists: false,
+            target_type: None,
+            target_points_to: None,
+        }
+    }
+
+    fn from_state(target: Utf8PathBuf, source: Utf8PathBuf) -> Self {
+        Self {
+            config_resolved_source: None,
+            config_resolved_target: None,
+            config_is_explicit: false,
+            state_resolved_source: Some(source),
+            state_resolved_target: Some(target),
+            source_exists: false,
+            target_exists: false,
+            target_type: None,
+            target_points_to: None,
+        }
+    }
+
+    fn merge(&mut self, other: LinkStatus) {
+        if other.config_resolved_source.is_some() {
+            self.config_resolved_source = other.config_resolved_source;
+            self.config_resolved_target = other.config_resolved_target;
+            self.config_is_explicit = other.config_is_explicit;
+            self.source_exists = other.source_exists;
+        }
+        if other.state_resolved_source.is_some() {
+            self.state_resolved_source = other.state_resolved_source;
+            self.state_resolved_target = other.state_resolved_target;
+        }
+    }
+}
+
 /// The Linker handles creating and managing symlinks
 pub struct Linker {
     /// Root directory for resolving relative paths (already resolved based on path_resolution strategy)
@@ -109,174 +157,141 @@ impl Linker {
         config: &DotyConfig,
         state: &DotyState,
     ) -> Result<HashMap<Utf8PathBuf, LinkStatus>> {
-        let mut link_states: HashMap<Utf8PathBuf, LinkStatus> = HashMap::new();
+        // 1. Stream Config Statuses
+        let config_stream = config
+            .packages
+            .iter()
+            .flat_map(|pkg| self.expand_package(pkg));
 
-        self.collect_config_states(&mut link_states, config)?;
-        self.merge_state_states(&mut link_states, state);
-        self.enrich_with_reality(&mut link_states)?;
+        // 2. Stream State Statuses
+        let state_stream = state
+            .links
+            .iter()
+            .map(|(target, source)| self.create_link_status_from_state(target, source));
 
-        Ok(link_states)
-    }
-
-    /// Step 1: Collect desired states from config
-    fn collect_config_states(
-        &self,
-        link_states: &mut HashMap<Utf8PathBuf, LinkStatus>,
-        config: &DotyConfig,
-    ) -> Result<()> {
-        for package in &config.packages {
-            self.process_package(link_states, package)?;
+        // 3. Fold into Map
+        let mut map: HashMap<Utf8PathBuf, LinkStatus> = HashMap::new();
+        for (target, status) in config_stream.chain(state_stream) {
+            map.entry(target)
+                .and_modify(|e| e.merge(status.clone()))
+                .or_insert(status);
         }
-        Ok(())
+
+        // 4. Enrich (Side Effects)
+        for status in map.values_mut() {
+            self.enrich_status(status)?;
+        }
+
+        Ok(map)
     }
 
-    /// Process a single package and expand it if necessary
-    fn process_package(
-        &self,
-        link_states: &mut HashMap<Utf8PathBuf, LinkStatus>,
-        package: &Package,
-    ) -> Result<()> {
+    /// Expand a package into a stream of LinkStatuses
+    fn expand_package(&self, package: &Package) -> Vec<(Utf8PathBuf, LinkStatus)> {
         let source_path = self.config_dir_or_cwd.join(&package.source);
+        let mut results = Vec::new();
 
         if !source_path.exists() {
-            // It's explicit because it's a package entry
-            self.add_config_status(
-                link_states,
+            // Explicit missing source
+            results.push((
                 package.target.clone(),
-                package.source.clone(),
-                true,  // explicit
-                false, // !exists
-            )?;
-            return Ok(());
+                LinkStatus::from_config(
+                    package.target.clone(),
+                    package.source.clone(),
+                    true,  // explicit
+                    false, // !exists
+                ),
+            ));
+            return results;
         }
 
         if source_path.is_file() {
-            self.add_config_status(
-                link_states,
+            results.push((
                 package.target.clone(),
-                package.source.clone(),
-                true, // explicit
-                true, // exists
-            )?;
+                LinkStatus::from_config(
+                    package.target.clone(),
+                    package.source.clone(),
+                    true, // explicit
+                    true, // exists
+                ),
+            ));
         } else if source_path.is_dir() {
             match package.strategy {
                 LinkStrategy::LinkFolder => {
-                    self.add_config_status(
-                        link_states,
+                    results.push((
                         package.target.clone(),
-                        package.source.clone(),
-                        true, // explicit
-                        true, // exists
-                    )?;
+                        LinkStatus::from_config(
+                            package.target.clone(),
+                            package.source.clone(),
+                            true, // explicit
+                            true, // exists
+                        ),
+                    ));
                 }
                 LinkStrategy::LinkFilesRecursive => {
-                    // This returns a list of files
-                    let files = self.scan_directory_recursive(&source_path)?;
-                    for file in files {
-                        let relative = file.strip_prefix(&source_path)?;
-                        let target_path = package.target.join(relative);
-                        let source_rel = package.source.join(relative);
-                        self.add_config_status(
-                            link_states,
-                            target_path,
-                            source_rel,
-                            false, // implicit
-                            true,  // exists
-                        )?;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Step 2: Merge stored states from state file
-    fn merge_state_states(
-        &self,
-        link_states: &mut HashMap<Utf8PathBuf, LinkStatus>,
-        state: &DotyState,
-    ) {
-        for (target, source) in &state.links {
-            // get the entry with the key of "target path" from link_states map, if not possible,
-            // create a new LinkStatus with the target path and the source path
-            let status = link_states
-                .entry(target.clone())
-                .or_insert_with(|| LinkStatus {
-                    config_resolved_source: None,
-                    config_resolved_target: None,
-                    config_is_explicit: false,
-                    state_resolved_source: None,
-                    state_resolved_target: Some(target.clone()),
-                    source_exists: false,
-                    target_exists: false,
-                    target_type: None,
-                    target_points_to: None,
-                });
-            status.state_resolved_source = Some(source.clone());
-            status.state_resolved_target = Some(target.clone());
-        }
-    }
-
-    /// Step 3: Enrich with reality (filesystem check)
-    fn enrich_with_reality(
-        &self,
-        link_states: &mut HashMap<Utf8PathBuf, LinkStatus>,
-    ) -> Result<()> {
-        for (target, status) in link_states.iter_mut() {
-            // Ensure config_resolved_target is set (it might be None if only in State)
-            if status.config_resolved_target.is_none() {
-                status.config_resolved_target = Some(target.clone());
-            }
-
-            let target_path = self.resolve_target_path(target)?;
-
-            if let Ok(metadata) = fs::symlink_metadata(&target_path) {
-                status.target_exists = true;
-                if metadata.is_symlink() {
-                    status.target_type = Some(FsType::Symlink);
-                    if let Ok(target) = fs::read_link(&target_path) {
-                        if let Ok(canonical) = target.canonicalize() {
-                            status.target_points_to =
-                                Some(Utf8PathBuf::from_path_buf(canonical).unwrap_or_default());
+                    if let Ok(files) = self.scan_directory_recursive(&source_path) {
+                        for file in files {
+                            if let Ok(relative) = file.strip_prefix(&source_path) {
+                                let target_path = package.target.join(relative);
+                                let source_rel = package.source.join(relative);
+                                results.push((
+                                    target_path.clone(),
+                                    LinkStatus::from_config(
+                                        target_path,
+                                        source_rel,
+                                        false, // implicit
+                                        true,  // exists
+                                    ),
+                                ));
+                            }
                         }
                     }
-                } else if metadata.is_dir() {
-                    status.target_type = Some(FsType::Directory);
-                } else {
-                    status.target_type = Some(FsType::File);
                 }
             }
         }
-        Ok(())
+        results
     }
 
-    /// Helper to update status with desired info
-    fn add_config_status(
+    /// Create a LinkStatus from state entry
+    fn create_link_status_from_state(
         &self,
-        link_states: &mut HashMap<Utf8PathBuf, LinkStatus>,
-        target: Utf8PathBuf,
-        source_rel: Utf8PathBuf,
-        is_explicit: bool,
-        source_exists: bool,
-    ) -> Result<()> {
-        let status = link_states
-            .entry(target.clone())
-            .or_insert_with(|| LinkStatus {
-                config_resolved_source: None,
-                config_resolved_target: None,
-                config_is_explicit: false,
-                state_resolved_source: None,
-                state_resolved_target: None,
-                source_exists: false,
-                target_exists: false,
-                target_type: None,
-                target_points_to: None,
-            });
+        target: &Utf8PathBuf,
+        source: &Utf8PathBuf,
+    ) -> (Utf8PathBuf, LinkStatus) {
+        (
+            target.clone(),
+            LinkStatus::from_state(target.clone(), source.clone()),
+        )
+    }
 
-        status.config_resolved_source = Some(source_rel);
-        status.config_resolved_target = Some(target);
-        status.config_is_explicit = is_explicit;
-        status.source_exists = source_exists;
+    /// Enrich status with filesystem reality
+    fn enrich_status(&self, status: &mut LinkStatus) -> Result<()> {
+        // Ensure config_resolved_target is set (it might be None if only in State)
+        if status.config_resolved_target.is_none() {
+            status.config_resolved_target = status.state_resolved_target.clone();
+        }
+
+        let target = status
+            .config_resolved_target
+            .as_ref()
+            .expect("Target must exist");
+        let target_path = self.resolve_target_path(target)?;
+
+        if let Ok(metadata) = fs::symlink_metadata(&target_path) {
+            status.target_exists = true;
+            if metadata.is_symlink() {
+                status.target_type = Some(FsType::Symlink);
+                if let Ok(target) = fs::read_link(&target_path) {
+                    if let Ok(canonical) = target.canonicalize() {
+                        status.target_points_to =
+                            Some(Utf8PathBuf::from_path_buf(canonical).unwrap_or_default());
+                    }
+                }
+            } else if metadata.is_dir() {
+                status.target_type = Some(FsType::Directory);
+            } else {
+                status.target_type = Some(FsType::File);
+            }
+        }
         Ok(())
     }
 
