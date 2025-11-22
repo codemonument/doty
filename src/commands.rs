@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use colored::Colorize;
+use pluralizer::pluralize;
 use std::env;
 
 use crate::config::{DotyConfig, LinkStrategy, PathResolution};
@@ -230,25 +231,45 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> 
     if created > 0 || updated > 0 || removed > 0 || warnings > 0 {
         println!("\n{}", "Summary:".bold());
         if created > 0 {
-            println!("  {} {} link(s) added", "[+]".green().bold(), created);
+            println!(
+                "  {} {} added",
+                "[+]".green().bold(),
+                pluralize("link", created as isize, true)
+            );
         }
         if updated > 0 {
-            println!("  {} {} link(s) updated", "[~]".yellow().bold(), updated);
+            println!(
+                "  {} {} updated",
+                "[~]".yellow().bold(),
+                pluralize("link", updated as isize, true)
+            );
         }
         if removed > 0 {
-            println!("  {} {} link(s) removed", "[-]".red().bold(), removed);
+            println!(
+                "  {} {} removed",
+                "[-]".red().bold(),
+                pluralize("link", removed as isize, true)
+            );
         }
         if warnings > 0 {
-            println!("  {} {} warning(s)", "[!]".yellow().bold(), warnings);
+            println!(
+                "  {} {}",
+                "[!]".yellow().bold(),
+                pluralize("warning", warnings as isize, true)
+            );
         }
         if skipped > 0 {
-            println!("  {} {} link(s) unchanged", "[·]".dimmed(), skipped);
+            println!(
+                "  {} {} unchanged",
+                "[·]".dimmed(),
+                pluralize("link", skipped as isize, true)
+            );
         }
     } else if skipped > 0 {
         println!(
-            "\n{} All {} link(s) already up to date",
+            "\n{} All {} already up to date",
             "✓".green().bold(),
-            skipped
+            pluralize("link", skipped as isize, true)
         );
     }
 
@@ -301,7 +322,11 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     let linker = Linker::new(config_dir_or_cwd.clone(), config.path_resolution);
 
     // Clean all links
-    println!("Removing {} managed link(s)...\n", state.links.len());
+    println!(
+        "Removing {} managed {}...\n",
+        state.links.len(),
+        pluralize("link", state.links.len() as isize, false)
+    );
     let actions = linker
         .clean(&state, dry_run)
         .context("Failed to clean links")?;
@@ -328,10 +353,10 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     }
 
     println!(
-        "\n{} {} {} link(s) removed",
+        "\n{} {} {} removed",
         "Summary:".bold(),
         "[-]".red().bold(),
-        actions.len()
+        pluralize("link", actions.len() as isize, true)
     );
 
     Ok(())
