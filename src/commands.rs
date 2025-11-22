@@ -110,13 +110,27 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> 
 
     // Print actions grouped by package
     for (package_key, actions) in package_actions {
+        // Filter out skipped actions for display
+        let display_actions: Vec<&&LinkAction> = actions
+            .iter()
+            .filter(|a| !matches!(**a, LinkAction::Skipped { .. }))
+            .collect();
+
+        if display_actions.is_empty() {
+            continue;
+        }
+
         println!("\n{}", package_key.bold());
-        for action in actions {
+        for action in display_actions {
             match action {
                 LinkAction::Created { target, source } => {
                     println!("  {} {} → {}", "[+]".green().bold(), target, source);
                 }
-                LinkAction::Updated { target, old_source, new_source } => {
+                LinkAction::Updated {
+                    target,
+                    old_source,
+                    new_source,
+                } => {
                     println!(
                         "  {} {} → {} {}",
                         "[~]".yellow().bold(),
@@ -125,13 +139,17 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> 
                         format!("(was: {})", old_source).dimmed()
                     );
                 }
-                LinkAction::Skipped { target, source } => {
-                    println!("  {} {} → {}", "·".dimmed(), target, source);
+                LinkAction::Skipped { .. } => {
+                    // Do not print skipped links
                 }
                 LinkAction::Removed { target, source } => {
                     println!("  {} {} → {}", "[-]".red().bold(), target, source);
                 }
-                LinkAction::Warning { target, source, message } => {
+                LinkAction::Warning {
+                    target,
+                    source,
+                    message,
+                } => {
                     println!("  {} {} → {}", "[!]".yellow().bold(), target, source);
                     println!("      Warning: {}", message);
                 }
