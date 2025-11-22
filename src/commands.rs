@@ -163,7 +163,12 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> 
                     println!("  {} {} → {}", "[-]".red().bold(), target, source);
                 }
                 LinkAction::Pruned { target, source } => {
-                    println!("  {} {} → {}", "[x]".red().bold(), target, source);
+                    // Make source path relative to basePath if possible
+                    let source_display = source
+                        .strip_prefix(&config_dir_or_cwd)
+                        .map(|p| p.to_string())
+                        .unwrap_or(source.to_string());
+                    println!("  {} {} → {}", "[x]".red().bold(), target, source_display);
                     println!("      Pruned: Source is missing, dangling symlink removed");
                 }
                 LinkAction::Warning {
