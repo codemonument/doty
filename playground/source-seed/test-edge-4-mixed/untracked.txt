@@ -1,0 +1,5 @@
+This file is intentionally NOT linked by doty.
+
+It exists in the same directory as tracked.md, but is not included in the doty.kdl configuration.
+
+This demonstrates selective file linking - only tracked.md will be symlinked to the target directory.
