@@ -28,6 +28,10 @@ enum Commands {
         /// Show what would be done without making changes
         #[arg(long)]
         dry_run: bool,
+        
+        /// Treat warnings as removals (useful for automation)
+        #[arg(long)]
+        force: bool,
     },
 
     /// Remove all symlinks managed by Doty
@@ -70,14 +74,17 @@ fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
-        Commands::Link { dry_run } => {
+        Commands::Link { dry_run, force } => {
             if dry_run {
                 println!("\n{} {}", "Linking 🔗".bold(), "[DRY RUN]".yellow().bold());
             } else {
                 println!("\n{}", "Linking 🔗".bold());
             }
+            if force {
+                println!("{} {}", "Mode:".bold(), "FORCE (warnings become removals)".red().bold());
+            }
             println!("Config: {}\n", config_path);
-            commands::link(config_path, dry_run)?;
+            commands::link(config_path, dry_run, force)?;
         }
         Commands::Clean { dry_run } => {
             if dry_run {

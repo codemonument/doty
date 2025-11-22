@@ -8,7 +8,7 @@ use crate::linker::{LinkAction, Linker};
 use crate::state::DotyState;
 
 /// Execute link command
-pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
+pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> {
     // Get hostname
     let hostname = hostname::get()?.to_string_lossy().to_string();
 
@@ -47,38 +47,76 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     // Create linker
     let linker = Linker::new(config_dir_or_cwd.clone(), config.path_resolution);
 
-    // Process each package
-    let mut all_actions = Vec::new();
-    for package in &config.packages {
-        // Show strategy name instead of "package"
-        let strategy_name = match package.strategy {
-            LinkStrategy::LinkFolder => "LinkFolder",
-            LinkStrategy::LinkFilesRecursive => "LinkFilesRecursive",
-        };
-        println!(
-            "\n{} {} → {}",
-            strategy_name.bold(),
-            package.source,
-            package.target
-        );
+    // Calculate diff using the new linker API
+    let actions = linker
+        .calculate_diff(&config, &state, force)
+        .context("Failed to calculate diff")?;
 
-        let actions = linker
-            .link_package(package, dry_run)
-            .with_context(|| format!("Failed to link: {}", package.source))?;
+    // Group actions by package for output
+    let mut package_actions: std::collections::HashMap<String, Vec<&LinkAction>> = std::collections::HashMap::new();
+    let mut orphaned_actions = Vec::new();
 
-        for action in &actions {
+    for action in &actions {
+        match action {
+            LinkAction::Created { target, .. } |
+            LinkAction::Updated { target, .. } |
+            LinkAction::Skipped { target, .. } |
+            LinkAction::Warning { target, .. } => {
+                // Find which package this target belongs to
+                let mut found_package = false;
+                for package in &config.packages {
+                    if target.starts_with(&package.target) {
+                        let package_key = format!("{} {} → {}",
+                            match package.strategy {
+                                LinkStrategy::LinkFolder => "LinkFolder",
+                                LinkStrategy::LinkFilesRecursive => "LinkFilesRecursive",
+                            },
+                            package.source,
+                            package.target
+                        );
+                        package_actions.entry(package_key).or_insert_with(Vec::new).push(action);
+                        found_package = true;
+                        break;
+                    }
+                }
+                if !found_package {
+                    orphaned_actions.push(action);
+                }
+            }
+            LinkAction::Removed { target, .. } => {
+                // Check if this target belongs to any current package
+                let mut found_package = false;
+                for package in &config.packages {
+                    if target.starts_with(&package.target) {
+                        let package_key = format!("{} {} → {}",
+                            match package.strategy {
+                                LinkStrategy::LinkFolder => "LinkFolder",
+                                LinkStrategy::LinkFilesRecursive => "LinkFilesRecursive",
+                            },
+                            package.source,
+                            package.target
+                        );
+                        package_actions.entry(package_key).or_insert_with(Vec::new).push(action);
+                        found_package = true;
+                        break;
+                    }
+                }
+                if !found_package {
+                    orphaned_actions.push(action);
+                }
+            }
+        }
+    }
+
+    // Print actions grouped by package
+    for (package_key, actions) in package_actions {
+        println!("\n{}", package_key.bold());
+        for action in actions {
             match action {
                 LinkAction::Created { target, source } => {
                     println!("  {} {} → {}", "[+]".green().bold(), target, source);
-                    if !dry_run {
-                        state.add_link(target.clone(), source.clone());
-                    }
                 }
-                LinkAction::Updated {
-                    target,
-                    old_source,
-                    new_source,
-                } => {
+                LinkAction::Updated { target, old_source, new_source } => {
                     println!(
                         "  {} {} → {} {}",
                         "[~]".yellow().bold(),
@@ -86,23 +124,55 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
                         new_source,
                         format!("(was: {})", old_source).dimmed()
                     );
-                    if !dry_run {
-                        state.add_link(target.clone(), new_source.clone());
-                    }
                 }
-                LinkAction::Skipped { .. } => {
-                    // Don't print anything for skipped links (already up to date)
+                LinkAction::Skipped { target, source } => {
+                    println!("  {} {} → {}", "·".dimmed(), target, source);
                 }
                 LinkAction::Removed { target, source } => {
                     println!("  {} {} → {}", "[-]".red().bold(), target, source);
-                    if !dry_run {
-                        state.remove_link(target);
-                    }
+                }
+                LinkAction::Warning { target, source, message } => {
+                    println!("  {} {} → {}", "[!]".yellow().bold(), target, source);
+                    println!("      Warning: {}", message);
                 }
             }
         }
+    }
 
-        all_actions.extend(actions);
+    // Print orphaned actions
+    if !orphaned_actions.is_empty() {
+        println!("\n{}", "Orphaned links:".bold());
+        for action in orphaned_actions {
+            match action {
+                LinkAction::Removed { target, source } => {
+                    println!("  {} {} → {}", "[-]".red().bold(), target, source);
+                }
+                _ => {} // Shouldn't happen for orphaned actions
+            }
+        }
+    }
+
+    // Execute actions and update state
+    for action in &actions {
+        linker.execute_action(action, dry_run)?;
+        
+        // Update state
+        if !dry_run {
+            match action {
+                LinkAction::Created { target, source } => {
+                    state.add_link(target.clone(), source.clone());
+                }
+                LinkAction::Updated { target, new_source, .. } => {
+                    state.add_link(target.clone(), new_source.clone());
+                }
+                LinkAction::Removed { target, .. } => {
+                    state.remove_link(target);
+                }
+                LinkAction::Warning { .. } | LinkAction::Skipped { .. } => {
+                    // Don't modify state for warnings or skipped links
+                }
+            }
+        }
     }
 
     // Save state
@@ -118,24 +188,28 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     }
 
     // Summary
-    let created = all_actions
+    let created = actions
         .iter()
         .filter(|a| matches!(a, LinkAction::Created { .. }))
         .count();
-    let updated = all_actions
+    let updated = actions
         .iter()
         .filter(|a| matches!(a, LinkAction::Updated { .. }))
         .count();
-    let skipped = all_actions
+    let skipped = actions
         .iter()
         .filter(|a| matches!(a, LinkAction::Skipped { .. }))
         .count();
-    let removed = all_actions
+    let removed = actions
         .iter()
         .filter(|a| matches!(a, LinkAction::Removed { .. }))
         .count();
+    let warnings = actions
+        .iter()
+        .filter(|a| matches!(a, LinkAction::Warning { .. }))
+        .count();
 
-    if created > 0 || updated > 0 || removed > 0 {
+    if created > 0 || updated > 0 || removed > 0 || warnings > 0 {
         println!("\n{}", "Summary:".bold());
         if created > 0 {
             println!("  {} {} link(s) added", "[+]".green().bold(), created);
@@ -145,6 +219,9 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
         }
         if removed > 0 {
             println!("  {} {} link(s) removed", "[-]".red().bold(), removed);
+        }
+        if warnings > 0 {
+            println!("  {} {} warning(s)", "[!]".yellow().bold(), warnings);
         }
         if skipped > 0 {
             println!("  {} {} link(s) unchanged", "·".dimmed(), skipped);
