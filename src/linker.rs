@@ -89,7 +89,18 @@ impl Linker {
         force: bool,
     ) -> Result<Vec<LinkAction>> {
         let link_states = self.gather_link_states(config, state)?;
-        Ok(self.determine_actions(link_states, force))
+
+        // Determine actions based on gathered statuses
+        Ok({
+            let this = &self;
+            let mut actions = Vec::new();
+            for status in link_states.values() {
+                if let Some(action) = this.determine_action_for_status(status, force) {
+                    actions.push(action);
+                }
+            }
+            actions
+        })
     }
 
     /// Gather information about all relevant targets from Config, State, and Filesystem
@@ -98,6 +109,7 @@ impl Linker {
         config: &DotyConfig,
         state: &DotyState,
     ) -> Result<HashMap<Utf8PathBuf, LinkStatus>> {
+        // Indexed by target path
         let mut link_states: HashMap<Utf8PathBuf, LinkStatus> = HashMap::new();
         let mut explicit_sources: HashSet<Utf8PathBuf> = HashSet::new();
 
@@ -240,108 +252,97 @@ impl Linker {
         Ok(())
     }
 
-    /// Determine actions based on gathered status
-    fn determine_actions(
-        &self,
-        statuses: HashMap<Utf8PathBuf, LinkStatus>,
-        force: bool,
-    ) -> Vec<LinkAction> {
-        let mut actions = Vec::new();
+    /// Determine action for a single status
+    fn determine_action_for_status(&self, status: &LinkStatus, force: bool) -> Option<LinkAction> {
+        let target = status
+            .config_resolved_target
+            .as_ref()
+            .or(status.state_resolved_target.as_ref())
+            .expect("Target must exist in either config or state");
 
-        for status in statuses.values() {
-            // We use the target from the map key (which is in config_resolved_target or state_resolved_target)
-            let target = status
-                .config_resolved_target
-                .as_ref()
-                .or(status.state_resolved_target.as_ref())
-                .expect("Target must exist in either config or state");
+        // Case 1: Link is in State but NOT in Config -> Remove it
+        if status.config_resolved_source.is_none() {
+            if let Some(stored) = &status.state_resolved_source {
+                return Some(LinkAction::Removed {
+                    target: target.clone(),
+                    source: stored.clone(),
+                });
+            }
+            return None; // Should not happen (neither config nor state)
+        }
 
-            match (
-                &status.config_resolved_source,
-                &status.state_resolved_source,
-            ) {
-                // Case 1: Configured & Stored
-                (Some(desired), Some(stored)) => {
-                    if !status.source_exists {
-                        if status.config_is_explicit {
-                            if force {
-                                actions.push(LinkAction::Removed {
-                                    target: target.clone(),
-                                    source: stored.clone(),
-                                });
-                            } else {
-                                actions.push(LinkAction::Warning {
-                                    target: target.clone(),
-                                    source: desired.clone(),
-                                    message: "Source file gone, remove from config if intentional"
-                                        .to_string(),
-                                });
-                            }
-                        }
-                    } else if desired != stored {
-                        actions.push(LinkAction::Updated {
-                            target: target.clone(),
-                            old_source: stored.clone(),
-                            new_source: desired.clone(),
-                        });
-                    } else {
-                        // Same source, check reality
-                        // Calculate absolute desired path for comparison
-                        let desired_abs = self
-                            .config_dir_or_cwd
-                            .join(desired)
-                            .canonicalize()
-                            .map(|p| Utf8PathBuf::from_path_buf(p).unwrap_or_default())
-                            .unwrap_or_else(|_| self.config_dir_or_cwd.join(desired));
+        let desired_source = status.config_resolved_source.as_ref().unwrap();
 
-                        let is_correct = if let Some(actual) = &status.target_points_to {
-                            *actual == desired_abs
-                        } else {
-                            false
-                        };
+        // Case 2: Source file does not exist
+        if !status.source_exists {
+            if !status.config_is_explicit {
+                return None; // Implicit missing sources are ignored
+            }
 
-                        if is_correct {
-                            actions.push(LinkAction::Skipped {
-                                target: target.clone(),
-                                source: desired.clone(),
-                            });
-                        } else {
-                            actions.push(LinkAction::Created {
-                                target: target.clone(),
-                                source: desired.clone(),
-                            });
-                        }
-                    }
-                }
-                // Case 2: Configured Only (New)
-                (Some(desired), None) => {
-                    if status.source_exists {
-                        actions.push(LinkAction::Created {
-                            target: target.clone(),
-                            source: desired.clone(),
-                        });
-                    } else if status.config_is_explicit {
-                        actions.push(LinkAction::Warning {
-                            target: target.clone(),
-                            source: desired.clone(),
-                            message: "Source file gone, remove from config if intentional"
-                                .to_string(),
-                        });
-                    }
-                }
-                // Case 3: Stored Only (Removed)
-                (None, Some(stored)) => {
-                    actions.push(LinkAction::Removed {
-                        target: target.clone(),
-                        source: stored.clone(),
-                    });
-                }
-                // Case 4: Neither (Impossible)
-                (None, None) => {}
+            // Explicit source missing
+            if force && status.state_resolved_source.is_some() {
+                // If forced and we tracked it before, remove it
+                return Some(LinkAction::Removed {
+                    target: target.clone(),
+                    source: status.state_resolved_source.as_ref().unwrap().clone(),
+                });
+            } else {
+                // Otherwise warn
+                return Some(LinkAction::Warning {
+                    target: target.clone(),
+                    source: desired_source.clone(),
+                    message: "Source file gone, remove from config if intentional".to_string(),
+                });
             }
         }
 
-        actions
+        // Case 3: Link is Configured (and source exists)
+
+        // Subcase 3a: Not in State (New link)
+        if status.state_resolved_source.is_none() {
+            return Some(LinkAction::Created {
+                target: target.clone(),
+                source: desired_source.clone(),
+            });
+        }
+
+        let stored_source = status.state_resolved_source.as_ref().unwrap();
+
+        // Subcase 3b: In State, but source path changed
+        if desired_source != stored_source {
+            return Some(LinkAction::Updated {
+                target: target.clone(),
+                old_source: stored_source.clone(),
+                new_source: desired_source.clone(),
+            });
+        }
+
+        // Subcase 3c: In State, source path same -> Check Reality
+        // Calculate absolute desired path for comparison
+        let desired_abs = self
+            .config_dir_or_cwd
+            .join(desired_source)
+            .canonicalize()
+            .map(|p| Utf8PathBuf::from_path_buf(p).unwrap_or_default())
+            .unwrap_or_else(|_| self.config_dir_or_cwd.join(desired_source));
+
+        let is_correct = if let Some(actual) = &status.target_points_to {
+            *actual == desired_abs
+        } else {
+            false
+        };
+
+        if is_correct {
+            return Some(LinkAction::Skipped {
+                target: target.clone(),
+                source: desired_source.clone(),
+            });
+        } else {
+            return Some(LinkAction::Created {
+                target: target.clone(),
+                source: desired_source.clone(),
+            });
+        }
     }
 
     /// Execute a single action
