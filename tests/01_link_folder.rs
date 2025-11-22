@@ -17,6 +17,19 @@ fn test_01_link_folder_simple() {
     let source_dir = test_case_dir.join("source");
     let target_dir = test_case_dir.join("target");
 
+    // Clean up: remove the symlink and lockfile from previous runs
+    let expected_symlink = target_dir.join("dummy");
+    if expected_symlink.exists() {
+        fs::remove_file(&expected_symlink).ok();
+    }
+    // Clean up lockfile directory if it exists
+    let lockfile_dir = test_case_dir.join(".doty/state");
+    if lockfile_dir.exists() {
+        fs::remove_dir_all(&lockfile_dir).ok();
+    }
+    // Clean up the file content in source/dummy/dummy.txt
+    fs::write(&source_dir.join("dummy/dummy.txt"), "Hello World").unwrap();
+
     // Ensure target directory exists and is empty
     if target_dir.exists() {
         fs::remove_dir_all(&target_dir).expect("Failed to clean target directory");
@@ -54,16 +67,4 @@ fn test_01_link_folder_simple() {
         fs::read_to_string(&expected_file).unwrap() == "Hello World 2",
         "dummy.txt in target/dummy should contain 'Hello World 2'"
     );
-
-    // Clean up: remove the symlink and lockfile
-    if expected_symlink.exists() {
-        fs::remove_file(&expected_symlink).ok();
-    }
-    // Clean up lockfile directory if it exists
-    let lockfile_dir = test_case_dir.join(".doty/state");
-    if lockfile_dir.exists() {
-        fs::remove_dir_all(&lockfile_dir).ok();
-    }
-    // Clean up the file content in source/dummy/dummy.txt
-    fs::write(&source_dir.join("dummy/dummy.txt"), "Hello World").unwrap();
 }
