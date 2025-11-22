@@ -22,6 +22,117 @@ The codebase already has:
 
 ## Phase 3 Tasks Breakdown
 
+### 3.0 Filesystem Utilities Refactoring (`src/fs_utils.rs`)
+
+**Purpose**: Extract reusable filesystem operations from `linker.rs` into a shared module that both the linker and scanner can use.
+
+**Rationale**: The scanner will need many of the same filesystem operations that the linker already implements. Rather than duplicating code, we extract these utilities into a shared module following the DRY principle.
+
+**Functions to extract from `linker.rs`:**
+
+```rust
+// 1. Directory scanning
+pub fn scan_directory_recursive(dir: &Utf8Path) -> Result<Vec<Utf8PathBuf>>
+// - Pure filesystem scanning logic
+// - Returns all files in directory tree
+// - Currently private method in Linker (line 416-432)
+
+// 2. Path resolution
+pub fn resolve_target_path(target: &Utf8Path, base_path: &Utf8Path) -> Result<Utf8PathBuf>
+// - Handles ~ expansion (relative to HOME)
+// - Handles absolute paths
+// - Handles relative paths (relative to base_path)
+// - Currently private method in Linker (line 498-517)
+// - Change from self.config_dir_or_cwd to base_path parameter
+
+// 3. Filesystem type detection
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FsType {
+    File,
+    Directory,
+    Symlink,
+}
+
+pub fn get_fs_type(path: &Utf8Path) -> Result<Option<FsType>>
+// - Returns filesystem type for a given path
+// - Uses symlink_metadata to handle broken symlinks
+// - Extracted from enrich_status logic (lines 279-293)
+
+// 4. Symlink operations
+pub fn read_symlink_target(path: &Utf8Path) -> Result<Option<Utf8PathBuf>>
+// - Reads where a symlink points to (canonical path)
+// - Returns None if not a symlink or broken
+// - Extracted from enrich_status logic (lines 283-288)
+
+pub fn is_broken_symlink(path: &Utf8Path) -> Result<bool>
+// - Checks if path is a symlink that points nowhere
+// - New helper function combining symlink check + target validation
+```
+
+**Update `src/linker.rs`:**
+
+```rust
+// Add import at top of file
+use crate::fs_utils::{
+    scan_directory_recursive,
+    resolve_target_path,
+    FsType,
+    get_fs_type,
+    read_symlink_target,
+};
+
+// Remove private implementations of:
+// - scan_directory_recursive() (delete lines 416-432)
+// - resolve_target_path() (delete lines 498-517)
+// - FsType enum (delete lines 42-46)
+
+// Update method calls:
+// Before: self.scan_directory_recursive(&source_path)
+// After:  scan_directory_recursive(&source_path)
+
+// Before: self.resolve_target_path(target)
+// After:  resolve_target_path(target, &self.config_dir_or_cwd)
+
+// Update enrich_status() to use get_fs_type() and read_symlink_target()
+
+// Keep in linker.rs (symlink-specific operations):
+// - create_symlink() - Platform-specific symlink creation
+// - create_link() - Link creation workflow with parent dir creation
+// - remove_link() - Link removal workflow
+```
+
+**Update `src/main.rs`:**
+
+```rust
+// Add new module declaration
+mod fs_utils;
+```
+
+**Benefits:**
+
+- ✅ **DRY Principle**: No code duplication between linker and scanner
+- ✅ **Testability**: Can test filesystem utilities independently
+- ✅ **Clarity**: Separates concerns (filesystem ops vs linking logic)
+- ✅ **Reusability**: Other future modules can use these utilities
+- ✅ **Maintenance**: Bug fixes in path resolution benefit both linker and scanner
+
+**Tests:**
+
+- Test `scan_directory_recursive()` with nested directories
+- Test `resolve_target_path()` with ~, absolute, and relative paths
+- Test `get_fs_type()` with files, directories, and symlinks
+- Test `read_symlink_target()` with valid and broken symlinks
+- Test `is_broken_symlink()` detection
+- Use real filesystem for these tests (not MemoryFS, as these are low-level utilities)
+
+**Implementation steps:**
+
+1. Create `src/fs_utils.rs` with extracted functions
+2. Add comprehensive tests for each utility function
+3. Update `src/linker.rs` to use `fs_utils` functions
+4. Run existing linker tests to ensure no regressions
+5. Update `src/main.rs` to declare the new module
+
 ### 3.1 Scanner Module (`src/scanner.rs`)
 
 **Purpose**: Scan target directories and detect differences between filesystem reality and Doty's knowledge (config + state)
@@ -393,15 +504,21 @@ portable-pty = "0.8"  # For testing interactive CLI
 
 ## Implementation Order
 
-1. **Scanner module** (3.1) - Core logic, no CLI interaction
+1. **Filesystem utilities refactoring** (3.0) - Extract shared code first
+   - Create `src/fs_utils.rs` with extracted functions
+   - Add tests for filesystem utilities
+   - Update `src/linker.rs` to use shared utilities
+   - Verify all existing tests still pass
+2. **Scanner module** (3.1) - Core logic, no CLI interaction
    - Focus on `LinkFilesRecursive` directory scanning
    - Skip untracked file detection for `LinkFolder`
-2. **Detect command** (3.2) - Non-interactive mode first
-3. **Helper functions** (3.4) - Move, update config, prompts
-4. **PTY testing infrastructure** (3.5) - Setup before interactive features
-5. **Adopt manual mode** (3.3.A) - Full manual workflow with PTY tests
-6. **Detect interactive** (3.2 + 3.3.B) - Connect detect to adopt with PTY tests
-7. **Polish** - Error handling, edge cases, better UX
+   - Use `fs_utils` for filesystem operations
+3. **Detect command** (3.2) - Non-interactive mode first
+4. **Helper functions** (3.4) - Move, update config, prompts
+5. **PTY testing infrastructure** (3.5) - Setup before interactive features
+6. **Adopt manual mode** (3.3.A) - Full manual workflow with PTY tests
+7. **Detect interactive** (3.2 + 3.3.B) - Connect detect to adopt with PTY tests
+8. **Polish** - Error handling, edge cases, better UX
 
 ## Testing Strategy
 
