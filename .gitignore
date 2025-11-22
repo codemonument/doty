@@ -3,3 +3,6 @@
 # Test temporary directories
 tests/tmpfs/*/
 !tests/tmpfs/.gitkeep
+
+# ignore all target folders in whole project 
+**/target
