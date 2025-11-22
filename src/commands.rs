@@ -164,7 +164,7 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> 
                 }
                 LinkAction::Pruned { target, source } => {
                     println!("  {} {} → {}", "[x]".red().bold(), target, source);
-                    println!("      Pruned: Source missing, dangling link removal");
+                    println!("      Pruned: Source is missing, dangling symlink removed");
                 }
                 LinkAction::Warning {
                     target,

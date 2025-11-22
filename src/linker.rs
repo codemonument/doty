@@ -144,9 +144,7 @@ impl Linker {
             let this = &self;
             let mut actions = Vec::new();
             for status in link_states.values() {
-                if let Some(action) = this.determine_action_for_status(status, force) {
-                    actions.push(action);
-                }
+                actions.extend(this.determine_action_for_status(status, force));
             }
             actions
         })
@@ -297,8 +295,9 @@ impl Linker {
         Ok(())
     }
 
-    /// Determine action for a single status
-    fn determine_action_for_status(&self, status: &LinkStatus, force: bool) -> Option<LinkAction> {
+    /// Determine action(s) for a single status
+    /// Returns a Vec to allow multiple actions (e.g., Warning + Pruned)
+    fn determine_action_for_status(&self, status: &LinkStatus, force: bool) -> Vec<LinkAction> {
         let target = status
             .config_resolved_target
             .as_ref()
@@ -308,12 +307,12 @@ impl Linker {
         // Case 1: Link is in Lockfile but NOT in Config -> Remove it
         if status.config_resolved_source.is_none() {
             if let Some(stored) = &status.state_resolved_source {
-                return Some(LinkAction::Removed {
+                return vec![LinkAction::Removed {
                     target: target.clone(),
                     source: stored.clone(),
-                });
+                }];
             }
-            return None; // Should not happen (neither config nor lockfile)
+            return vec![]; // Should not happen (neither config nor lockfile)
         }
 
         let desired_source = status.config_resolved_source.as_ref().unwrap();
@@ -321,7 +320,7 @@ impl Linker {
         // Case 2: Source file does not exist
         if !status.source_exists {
             if !status.config_is_explicit {
-                return None; // Implicit missing sources are ignored
+                return vec![]; // Implicit missing sources are ignored
             }
 
             // Explicit source missing
@@ -332,31 +331,39 @@ impl Linker {
                 status.target_type == Some(FsType::Symlink) && status.target_points_to.is_none();
 
             if is_broken_symlink {
-                // Broken symlink with missing source - schedule for cleanup
+                // Broken symlink with missing source - return both Warning and Pruned
                 // Use state_resolved_source if available (from lockfile), otherwise use desired_source (from config)
                 let source = status
                     .state_resolved_source
                     .as_ref()
                     .unwrap_or(desired_source)
                     .clone();
-                return Some(LinkAction::Pruned {
-                    target: target.clone(),
-                    source,
-                });
+                return vec![
+                    LinkAction::Warning {
+                        target: target.clone(),
+                        source: desired_source.clone(),
+                        message: "Source (file|dir) gone, remove from config if intentional"
+                            .to_string(),
+                    },
+                    LinkAction::Pruned {
+                        target: target.clone(),
+                        source,
+                    },
+                ];
             } else if force && status.state_resolved_source.is_some() {
                 // If forced and we tracked it before, remove it
-                return Some(LinkAction::Removed {
+                return vec![LinkAction::Removed {
                     target: target.clone(),
                     source: status.state_resolved_source.as_ref().unwrap().clone(),
-                });
+                }];
             } else {
                 // Otherwise warn
-                return Some(LinkAction::Warning {
+                return vec![LinkAction::Warning {
                     target: target.clone(),
                     source: desired_source.clone(),
                     message: "Source (file|dir) gone, remove from config if intentional"
                         .to_string(),
-                });
+                }];
             }
         }
 
@@ -364,10 +371,10 @@ impl Linker {
 
         // Subcase 3a: Not in Lockfile (New link)
         if status.state_resolved_source.is_none() {
-            return Some(LinkAction::Created {
+            return vec![LinkAction::Created {
                 target: target.clone(),
                 source: desired_source.clone(),
-            });
+            }];
         }
 
         let stored_source = status.state_resolved_source.as_ref().unwrap();
@@ -382,11 +389,11 @@ impl Linker {
             .unwrap_or_else(|_| self.config_dir_or_cwd.join(desired_source));
 
         if desired_abs_source != *stored_source {
-            return Some(LinkAction::Updated {
+            return vec![LinkAction::Updated {
                 target: target.clone(),
                 old_source: stored_source.clone(),
                 new_source: desired_source.clone(),
-            });
+            }];
         }
 
         // Subcase 3c: In Lockfile, source path same -> Check Reality
@@ -405,15 +412,15 @@ impl Linker {
         };
 
         if is_correct {
-            return Some(LinkAction::Skipped {
+            return vec![LinkAction::Skipped {
                 target: target.clone(),
                 source: desired_source.clone(),
-            });
+            }];
         } else {
-            return Some(LinkAction::Created {
+            return vec![LinkAction::Created {
                 target: target.clone(),
                 source: desired_source.clone(),
-            });
+            }];
         }
     }
 

@@ -156,7 +156,12 @@ fn test_02_link_folder_src_gone() {
         "Output should contain [x] icon for Pruned action"
     );
     assert!(
-        dry_run_output.contains("Pruned: Source missing, dangling link removal"),
+        dry_run_output
+            .contains("Warning: Source (file|dir) gone, remove from config if intentional"),
+        "Output should contain Warning message"
+    );
+    assert!(
+        dry_run_output.contains("Pruned: Source is missing, dangling symlink removed"),
         "Output should contain Pruned message"
     );
     assert!(
@@ -189,7 +194,12 @@ fn test_02_link_folder_src_gone() {
         "Output should contain [x] icon for Pruned action"
     );
     assert!(
-        real_run_output.contains("Pruned: Source missing, dangling link removal"),
+        real_run_output
+            .contains("Warning: Source (file|dir) gone, remove from config if intentional"),
+        "Output should contain Warning message"
+    );
+    assert!(
+        real_run_output.contains("Pruned: Source is missing, dangling symlink removed"),
         "Output should contain Pruned message"
     );
 
