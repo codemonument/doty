@@ -340,7 +340,15 @@ impl Linker {
         let stored_source = status.state_resolved_source.as_ref().unwrap();
 
         // Subcase 3b: In Lockfile, but source path changed
-        if desired_source != stored_source {
+        // Normalize desired_source to absolute for comparison (lockfile stores absolute paths)
+        let desired_abs_source = self
+            .config_dir_or_cwd
+            .join(desired_source)
+            .canonicalize()
+            .map(|p| Utf8PathBuf::from_path_buf(p).unwrap_or_default())
+            .unwrap_or_else(|_| self.config_dir_or_cwd.join(desired_source));
+
+        if desired_abs_source != *stored_source {
             return Some(LinkAction::Updated {
                 target: target.clone(),
                 old_source: stored_source.clone(),

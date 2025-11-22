@@ -52,17 +52,29 @@ impl Scanner {
 
         // Check for broken symlinks from lockfile that aren't already covered by package scanning
         for (lockfile_target, _) in &lockfile.links {
-            // Resolve lockfile target to absolute path
+            // Lockfile now stores absolute paths, but resolve_target_path handles both absolute and relative
+            // Since lockfile_target is already absolute, resolve_target_path will just return it
             let resolved_target = resolve_target_path(lockfile_target, &self.config_dir_or_cwd)?;
 
             // Skip if this target is already covered by a package
             let is_covered_by_package = config.packages.iter().any(|pkg| {
                 let pkg_target =
                     resolve_target_path(&pkg.target, &self.config_dir_or_cwd).unwrap_or_default();
-                resolved_target.starts_with(pkg_target)
+                // For comparison, try to canonicalize both paths
+                // If canonicalization fails (e.g., broken symlink), use the original paths
+                let resolved_normalized = resolved_target
+                    .canonicalize_utf8()
+                    .unwrap_or_else(|_| resolved_target.clone());
+                let pkg_normalized = pkg_target
+                    .canonicalize_utf8()
+                    .unwrap_or_else(|_| pkg_target.clone());
+                // Check if resolved target is within the package target directory
+                resolved_normalized.starts_with(&pkg_normalized) || resolved_normalized == pkg_normalized
             });
 
             if !is_covered_by_package {
+                // Check if the target exists and is a symlink
+                // Use resolved_target directly (lockfile stores absolute paths)
                 if let Some(fs_type) = get_fs_type(&resolved_target)? {
                     if fs_type == crate::fs_utils::FsType::Symlink {
                         if is_broken_symlink(&resolved_target)? {

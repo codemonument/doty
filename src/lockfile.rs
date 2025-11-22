@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use crate::fs_utils::resolve_target_path;
+
 /// Represents the lockfile of deployed symlinks on a specific machine
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lockfile {
@@ -162,24 +164,66 @@ impl Lockfile {
         doc.to_string()
     }
 
-    /// Add a link to the lockfile
+    /// Normalize a path to absolute using base_path
+    /// Handles ~ expansion, absolute paths, and relative paths
+    /// Note: We don't canonicalize paths here to preserve symlink paths (including broken ones)
+    fn normalize_to_absolute(path: &Utf8Path, base_path: &Utf8Path) -> Result<Utf8PathBuf> {
+        // Try to resolve as target path first (handles ~ expansion)
+        if let Ok(resolved) = resolve_target_path(path, base_path) {
+            // Return resolved path without canonicalizing (to preserve symlink paths)
+            return Ok(resolved);
+        }
+
+        // If resolve_target_path fails, try simple absolute/relative check
+        if path.is_absolute() {
+            return Ok(path.to_path_buf());
+        }
+
+        // Relative path - join with base_path
+        Ok(base_path.join(path))
+    }
+
+    /// Add a link to the lockfile (paths are normalized to absolute)
     pub fn add_link(&mut self, target: Utf8PathBuf, source: Utf8PathBuf) {
-        self.links.insert(target, source);
+        // Normalize both paths to absolute
+        let abs_target =
+            Self::normalize_to_absolute(&target, &self.base_path).unwrap_or_else(|_| target);
+        let abs_source =
+            Self::normalize_to_absolute(&source, &self.base_path).unwrap_or_else(|_| source);
+        self.links.insert(abs_target, abs_source);
     }
 
     /// Remove a link from the lockfile
+    /// Normalizes the target path to absolute before removing
     pub fn remove_link(&mut self, target: &Utf8Path) -> Option<Utf8PathBuf> {
-        self.links.remove(target)
+        if let Ok(abs_target) = Self::normalize_to_absolute(target, &self.base_path) {
+            self.links.remove(&abs_target)
+        } else {
+            // Fallback to direct remove if normalization fails
+            self.links.remove(target)
+        }
     }
 
     /// Check if a target is managed by Doty
+    /// Normalizes the target path to absolute before checking
     pub fn is_managed(&self, target: &Utf8Path) -> bool {
-        self.links.contains_key(target)
+        if let Ok(abs_target) = Self::normalize_to_absolute(target, &self.base_path) {
+            self.links.contains_key(&abs_target)
+        } else {
+            // Fallback to direct check if normalization fails
+            self.links.contains_key(target)
+        }
     }
 
     /// Get the source path for a target
+    /// Normalizes the target path to absolute before looking up
     pub fn get_source(&self, target: &Utf8Path) -> Option<&Utf8PathBuf> {
-        self.links.get(target)
+        if let Ok(abs_target) = Self::normalize_to_absolute(target, &self.base_path) {
+            self.links.get(&abs_target)
+        } else {
+            // Fallback to direct lookup if normalization fails
+            self.links.get(target)
+        }
     }
 }
 
@@ -207,14 +251,17 @@ mod tests {
             Utf8PathBuf::from("nvim"),
         );
 
+        // Lockfile now stores absolute paths
         assert!(lockfile.is_managed(&Utf8PathBuf::from("~/.config/nvim")));
-        assert_eq!(
-            lockfile.get_source(&Utf8PathBuf::from("~/.config/nvim")),
-            Some(&Utf8PathBuf::from("nvim"))
-        );
+        // Source is normalized to absolute path
+        let source = lockfile.get_source(&Utf8PathBuf::from("~/.config/nvim"));
+        assert!(source.is_some());
+        assert!(source.unwrap().is_absolute());
+        assert!(source.unwrap().ends_with("nvim"));
 
         let removed = lockfile.remove_link(&Utf8PathBuf::from("~/.config/nvim"));
-        assert_eq!(removed, Some(Utf8PathBuf::from("nvim")));
+        assert!(removed.is_some());
+        assert!(removed.unwrap().is_absolute());
         assert!(!lockfile.is_managed(&Utf8PathBuf::from("~/.config/nvim")));
     }
 
@@ -234,10 +281,11 @@ mod tests {
         assert!(kdl.contains("lockfileVersion 1"));
         assert!(kdl.contains("basePath \"/test/base\""));
         assert!(kdl.contains("link"));
-        assert!(kdl.contains("source=nvim"));
-        assert!(kdl.contains("target=\"~/.config/nvim\""));
-        assert!(kdl.contains("source=\"zsh/.zshrc\""));
-        assert!(kdl.contains("target=\"~/.zshrc\""));
+        // Lockfile now stores absolute paths
+        assert!(kdl.contains("source=\"/test/base/nvim\""));
+        // Target is normalized (HOME expansion), so check it's absolute
+        assert!(kdl.contains("target="));
+        assert!(kdl.contains("source=\"/test/base/zsh/.zshrc\""));
     }
 
     #[test]
