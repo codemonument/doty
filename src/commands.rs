@@ -408,7 +408,8 @@ pub fn detect(config_path: Utf8PathBuf, interactive: bool) -> Result<()> {
 
     // Load state
     let state_dir = config_dir_or_cwd.join(".doty/state");
-    let state = DotyState::load(&state_dir, &hostname, config_dir_or_cwd.clone()).context("Failed to load state")?;
+    let mut state = DotyState::load(&state_dir, &hostname, config_dir_or_cwd.clone()).context("Failed to load state")?;
+    let mut state_modified = false;
 
     // Create scanner
     let scanner = Scanner::new(config_dir_or_cwd.clone());
@@ -516,6 +517,26 @@ pub fn detect(config_path: Utf8PathBuf, interactive: bool) -> Result<()> {
                     if let Err(e) = std::fs::remove_file(broken_link) {
                         println!("  {} Failed to remove {}: {}", "✗".red().bold(), broken_link, e);
                     } else {
+                        // Also remove from state
+                        // The key in state might be relative, so we need to find the matching key
+                        let key_to_remove = state.links.keys().find(|k| {
+                            if let Ok(resolved) = crate::fs_utils::resolve_target_path(k, &config_dir_or_cwd) {
+                                &resolved == broken_link
+                            } else {
+                                false
+                            }
+                        }).cloned();
+
+                        if let Some(key) = key_to_remove {
+                            state.remove_link(&key);
+                            state_modified = true;
+                        } else {
+                            // Fallback: try removing as is
+                            if state.remove_link(broken_link).is_some() {
+                                state_modified = true;
+                            }
+                        }
+
                         println!("  {} Removed {}", "✓".green().bold(), broken_link);
                         removed_count += 1;
                     }
@@ -534,6 +555,15 @@ pub fn detect(config_path: Utf8PathBuf, interactive: bool) -> Result<()> {
         }
     } else {
         println!("\n{} {} to adopt or cleanup", "Run 'doty detect --interactive'".yellow().bold(), "interactive mode".yellow());
+    }
+
+    // Save state if modified
+    if state_modified {
+        if let Err(e) = state.save(&state_dir) {
+            println!("  {} Failed to save state: {}", "✗".red().bold(), e);
+        } else {
+            println!("  {} State updated", "✓".green().bold());
+        }
     }
 
     Ok(())
