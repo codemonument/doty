@@ -51,7 +51,11 @@ enum Commands {
     },
 
     /// Audit targets for untracked files or broken links
-    Detect,
+    Detect {
+        /// Run in interactive mode for adoption/cleanup
+        #[arg(short, long)]
+        interactive: bool,
+    },
 
     /// Show current system health and mapping status
     Status,
@@ -101,9 +105,14 @@ fn main() -> anyhow::Result<()> {
             println!("\n{} {}: {}", "Adopting 📦".bold(), "for path".bold(), path);
             println!("Not yet implemented");
         }
-        Commands::Detect => {
-            println!("\n{}", "Detecting unmonitored files 🔍".bold());
-            println!("Not yet implemented");
+        Commands::Detect { interactive } => {
+            if interactive {
+                println!("\n{} {}", "Detecting unmonitored files 🔍".bold(), "[INTERACTIVE]".yellow().bold());
+            } else {
+                println!("\n{}", "Detecting unmonitored files 🔍".bold());
+            }
+            println!("Config: {}", config_path);
+            commands::detect(config_path, interactive)?;
         }
         Commands::Status => {
             println!("\n{}", "Status 📊".bold());

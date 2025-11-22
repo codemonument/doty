@@ -6,6 +6,7 @@ use std::env;
 
 use crate::config::{DotyConfig, LinkStrategy, PathResolution};
 use crate::linker::{LinkAction, Linker};
+use crate::scanner::{Scanner, DriftType};
 use crate::state::DotyState;
 
 /// Execute link command
@@ -358,6 +359,130 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
         "[-]".red().bold(),
         pluralize("link", actions.len() as isize, true)
     );
+
+    Ok(())
+}
+
+/// Execute detect command
+pub fn detect(config_path: Utf8PathBuf, interactive: bool) -> Result<()> {
+    // Get hostname
+    let hostname = hostname::get()?.to_string_lossy().to_string();
+
+    // Load config to determine path resolution strategy
+    let config = DotyConfig::from_file(&config_path).context("Failed to load configuration")?;
+
+    // Determine repo root based on path resolution strategy
+    let config_dir_or_cwd = match config.path_resolution {
+        PathResolution::Config => {
+            // Resolve relative to config file location
+            let config_dir = config_path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?;
+            
+            // Canonicalize to get absolute path
+            let abs_path = if config_dir.as_str().is_empty() || config_dir == "." {
+                Utf8PathBuf::from_path_buf(env::current_dir()?)
+                    .map_err(|_| anyhow::anyhow!("Current directory path is not valid UTF-8"))?
+            } else {
+                config_dir.canonicalize_utf8()?
+            };
+            
+            abs_path
+        }
+        PathResolution::Cwd => {
+            // Resolve relative to current working directory
+            Utf8PathBuf::from_path_buf(env::current_dir()?)
+                .map_err(|_| anyhow::anyhow!("Current directory path is not valid UTF-8"))?
+        }
+    };
+
+    // Load state
+    let state_dir = config_dir_or_cwd.join(".doty/state");
+    let state = DotyState::load(&state_dir, &hostname, config_dir_or_cwd.clone()).context("Failed to load state")?;
+
+    // Create scanner
+    let scanner = Scanner::new(config_dir_or_cwd.clone());
+
+    // Run drift detection
+    let drift_items = scanner.scan_targets(&config, &state).context("Failed to scan for drift")?;
+
+    // Group drift items by type and package
+    let mut untracked_by_package: std::collections::HashMap<String, Vec<Utf8PathBuf>> = std::collections::HashMap::new();
+    let mut broken_links = Vec::new();
+
+    for item in &drift_items {
+        match item.drift_type {
+            DriftType::Untracked => {
+                if let Some(package) = &item.package {
+                    let package_key = format!("{} {} → {}",
+                        match package.strategy {
+                            LinkStrategy::LinkFilesRecursive => "LinkFilesRecursive",
+                            LinkStrategy::LinkFolder => "LinkFolder",
+                        },
+                        package.source,
+                        package.target
+                    );
+                    untracked_by_package.entry(package_key).or_insert_with(Vec::new).push(item.target_path.clone());
+                }
+            }
+            DriftType::Broken => {
+                broken_links.push(item.target_path.clone());
+            }
+            DriftType::Modified | DriftType::Orphaned => {
+                // These are handled elsewhere or not implemented yet
+            }
+        }
+    }
+
+    // Print results
+    if untracked_by_package.is_empty() && broken_links.is_empty() {
+        println!("\n{} No drift detected", "✓".green().bold());
+        return Ok(());
+    }
+
+    // Print untracked files (only for LinkFilesRecursive packages)
+    for (package_key, untracked_files) in &untracked_by_package {
+        println!("\n{} {}:", "Untracked files in".bold(), package_key);
+        for file in untracked_files {
+            println!("  {} {}", "[?]".yellow().bold(), file);
+        }
+    }
+
+    // Print broken symlinks
+    if !broken_links.is_empty() {
+        println!("\n{}", "Broken symlinks:".bold());
+        for link in &broken_links {
+            // Try to get the source from state for better reporting
+            if let Some(source) = state.get_source(link) {
+                println!("  {} {} → {}", "[!]".red().bold(), link, source);
+            } else {
+                println!("  {} {}", "[!]".red().bold(), link);
+            }
+        }
+    }
+
+    // Interactive mode handling
+    if interactive {
+        println!("\n{}", "Interactive mode:".bold());
+        
+        // Handle untracked files
+        for (package_key, untracked_files) in &untracked_by_package {
+            if !untracked_files.is_empty() {
+                println!("\n{} {}:", "Adopt untracked files for".bold(), package_key);
+                // TODO: Implement interactive adoption in step 3.3
+                println!("  (Interactive adoption not yet implemented - see step 3.3)");
+            }
+        }
+
+        // Handle broken links
+        if !broken_links.is_empty() {
+            println!("\n{}", "Remove broken symlinks?".bold());
+            // TODO: Implement interactive cleanup in step 3.3
+            println!("  (Interactive cleanup not yet implemented - see step 3.3)");
+        }
+    } else {
+        println!("\n{} {} to adopt or cleanup", "Run 'doty detect --interactive'".yellow().bold(), "interactive mode".yellow());
+    }
 
     Ok(())
 }
