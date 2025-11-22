@@ -322,7 +322,8 @@ impl Linker {
                 return Some(LinkAction::Warning {
                     target: target.clone(),
                     source: desired_source.clone(),
-                    message: "Source file gone, remove from config if intentional".to_string(),
+                    message: "Source (file|dir) gone, remove from config if intentional"
+                        .to_string(),
                 });
             }
         }
