@@ -53,7 +53,7 @@ enum Commands {
     /// Audit targets for untracked files or broken links
     Detect {
         /// Run in interactive mode for adoption/cleanup
-        #[arg(short, long)]
+        #[arg(short = 'i', long)]
         interactive: bool,
     },
 
