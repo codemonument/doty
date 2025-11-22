@@ -49,6 +49,25 @@ pub fn run_doty_link(config_path: &Path) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Helper function to run doty link command with --dry-run flag
+pub fn run_doty_link_dry_run(config_path: &Path) -> Result<String, String> {
+    let binary = get_doty_binary();
+    let output = Command::new(binary)
+        .arg("link")
+        .arg("--config")
+        .arg(config_path)
+        .arg("--dry-run")
+        .output()
+        .map_err(|e| format!("Failed to execute doty: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("doty link --dry-run failed: {}", stderr));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 /// Helper function to check if a path is a symlink pointing to the expected target
 /// ## Parameters
 /// sym_path: the path of the symlink to check
