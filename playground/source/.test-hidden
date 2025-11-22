@@ -1,0 +1,25 @@
+# Test Case EDGE-1: Hidden File Linking
+
+**Strategy:** LinkFilesRecursive (Dotter-like)
+
+**What this tests:**
+- Linking hidden files (files starting with dot)
+- Ensures dotfiles are properly handled
+- Tests edge case of hidden file symlinks
+
+**Configuration:**
+```kdl
+LinkFilesRecursive "source/.test-hidden" {
+    target "target/.test-hidden"
+}
+```
+
+**Expected Result:**
+- `target/.test-hidden` becomes a symlink pointing to this hidden file
+- Hidden files are properly detected and linked
+- No special handling required for dotfiles
+
+**Use Case:**
+- Dotfile management (common use case for doty)
+- Hidden configuration files
+- System files that start with dot

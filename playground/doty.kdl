@@ -1,98 +1,126 @@
-// doty.kdl - Comprehensive test configuration for doty
-// This file demonstrates all possible linking combinations and strategies
+// doty.kdl - Comprehensive test configuration for doty playground
+// Each test case has dedicated files/directories with explanatory content
 
-// Global defaults
+//=============================================================================
+// GLOBAL DEFAULTS
+//=============================================================================
+
 defaults {
     // Path resolution strategy: "config" (default) or "cwd"
-    // "config" - resolve paths relative to doty.kdl location
+    // "config" - resolve paths relative to doty.kdl location (recommended)
     // "cwd" - resolve paths relative to current working directory
     pathResolution "config"
 }
 
 //=============================================================================
-// LINKFOLDER STRATEGY (Stow-like)
+// LINKFOLDER STRATEGY TESTS (Stow-like)
 // Creates a single symbolic link for the entire directory
-// Use Case: .config/app directories where you want to track ALL files
+// Use Case: Directories where you want to track ALL files as a unit
 //=============================================================================
 
-// Example 1: Basic LinkFolder with block syntax
-LinkFolder "source/configs" {
-    target "target/.configs"
+// LF-1: Basic LinkFolder with block syntax
+LinkFolder "source/test-lf-1-basic" {
+    target "target/test-lf-1-basic"
 }
 
-// Example 2: Single line LinkFolder syntax
-LinkFolder "source/scripts" target="target/scripts"
+// LF-2: LinkFolder with single-line syntax (compact format)
+LinkFolder "source/test-lf-2-inline" target="target/test-lf-2-inline"
 
-// Example 3: LinkFolder with different target name
-LinkFolder "source/docs" {
-    target "target/documentation"
+// LF-3: LinkFolder with renamed target (source and target names differ)
+LinkFolder "source/test-lf-3-rename" {
+    target "target/test-lf-3-renamed-folder"
 }
 
 //=============================================================================
-// LINKFILESRECURSIVE STRATEGY (Dotter-like)
+// LINKFILESRECURSIVE STRATEGY TESTS (Dotter-like)
 // Recreates directory structure and symlinks individual files
-// Use Case: Complex configs, apps that dislike symlinked roots, or when
-//           you only want to manage specific files in a shared folder
+// Use Case: Selective file management, apps that dislike symlinked roots
 //=============================================================================
 
-// Example 1: Single file linking with block syntax
-LinkFilesRecursive "source/config.toml" {
-    target "target/config.toml"
+// LFR-1: Single file linking with block syntax
+LinkFilesRecursive "source/test-lfr-1-single-file.md" {
+    target "target/test-lfr-1-single-file.md"
 }
 
-// Example 2: Single line syntax for single file
-LinkFilesRecursive "source/root.txt" target="target/root.txt"
+// LFR-2: Single file linking with inline syntax (compact format)
+LinkFilesRecursive "source/test-lfr-2-inline.md" target="target/test-lfr-2-inline.md"
 
-// Example 3: Recursive directory linking (recreates structure)
-LinkFilesRecursive "source/images" {
-    target "target/pictures"
+// LFR-3: Recursive directory linking (recreates structure, symlinks files)
+LinkFilesRecursive "source/test-lfr-3-recursive" {
+    target "target/test-lfr-3-recursive"
 }
 
-// Example 4: Nested path source to flat target
-LinkFilesRecursive "source/docs/nested" {
-    target "target/nested-docs"
+// LFR-4: Nested source to flat target (flattening structure)
+LinkFilesRecursive "source/test-lfr-4-nested/deep/file.md" {
+    target "target/test-lfr-4-flat.md"
 }
 
-// Example 5: Nested path to nested path
-// NOTE: This conflicts with LinkFolder "source/docs" above!
-// Uncommenting this will cause an error (parent is already a symlink)
-// LinkFilesRecursive "source/docs/nested/guide.md" {
-//     target "target/documentation/nested/guide.md"
-// }
+// LFR-5: Nested source to nested target (preserving structure)
+LinkFilesRecursive "source/test-lfr-5-nested/deep/file.md" {
+    target "target/test-lfr-5-nested/deep/file.md"
+}
 
 //=============================================================================
 // EDGE CASES AND SPECIAL SCENARIOS
 //=============================================================================
 
-// Hidden file linking
-LinkFilesRecursive "source/.hidden" {
-    target "target/.hidden"
+// EDGE-1: Hidden file linking (dotfiles)
+LinkFilesRecursive "source/.test-hidden" {
+    target "target/.test-hidden"
 }
 
-// Deep nesting - specific file from nested directory
-LinkFilesRecursive "source/configs/dev.toml" {
-    target "target/development.toml"
+// EDGE-2: Deep nesting - extracting file from 4 levels deep
+LinkFilesRecursive "source/test-edge-2-deep/level1/level2/level3/file.md" {
+    target "target/test-edge-2-extracted.md"
 }
 
-// Same source to multiple targets (should work)
-LinkFilesRecursive "source/configs/prod.toml" {
-    target "target/production-config.toml"
+// EDGE-3: Same source to multiple targets (multiple symlinks to same file)
+LinkFilesRecursive "source/test-edge-3-multi.md" {
+    target "target/test-edge-3-copy1.md"
 }
 
-LinkFilesRecursive "source/configs/prod.toml" {
-    target "target/configs/prod.toml"
+LinkFilesRecursive "source/test-edge-3-multi.md" {
+    target "target/test-edge-3-copy2.md"
 }
+
+// EDGE-4: Selective file linking (only specific files from a directory)
+LinkFilesRecursive "source/test-edge-4-mixed/tracked.md" {
+    target "target/test-edge-4-mixed/tracked.md"
+}
+// Note: untracked.txt in the same directory is intentionally NOT linked
 
 //=============================================================================
 // PATH RESOLUTION DEMONSTRATION
 //=============================================================================
 
-// With pathResolution "config" (current setting):
-// - All source paths are relative to this file's location (playground/)
-// - "source/configs" resolves to "playground/source/configs"
-// - Can run doty from anywhere: `cd playground && doty link`
+// PATH-1: Config-based resolution (default, always active)
+LinkFilesRecursive "source/test-path-1-config.md" {
+    target "target/test-path-1-config.md"
+}
+
+// PATH-2: CWD-based resolution (commented out by default)
+// To test: uncomment this and change defaults.pathResolution to "cwd"
+// LinkFilesRecursive "source/test-path-2-cwd.md" {
+//     target "target/test-path-2-cwd.md"
+// }
+
+//=============================================================================
+// TESTING INSTRUCTIONS
+//=============================================================================
 //
-// To test pathResolution "cwd":
-// - Change defaults.pathResolution to "cwd"
-// - Source paths become relative to where doty command is executed
-// - Must run from playground/: `cd playground && doty link`
+// From playground directory:
+//   doty link --dry-run    # Preview what will be linked
+//   doty link              # Create all symlinks
+//   doty status            # Check link status
+//   doty clean             # Remove all symlinks
+//
+// From other directories:
+//   doty -c playground/doty.kdl link --dry-run
+//   doty -c playground/doty.kdl link
+//
+// Each test case file contains:
+//   - Description of what it tests
+//   - Expected results
+//   - Use cases
+//   - Configuration snippet
+//
