@@ -2,7 +2,9 @@ use std::fs;
 use std::path::Path;
 
 mod test_lib;
-use test_lib::cli_test_utils::{is_symlink_to, run_doty_link, run_doty_link_dry_run};
+use test_lib::cli_test_utils::{
+    is_symlink_to, run_doty_link, run_doty_link_dry_run, write_logfile,
+};
 
 /// Test case: Link one folder (source/dummy) to another folder (target/dummy)
 /// Context:
@@ -141,20 +143,24 @@ fn test_02_link_folder_src_gone() {
     );
 
     // Step 8: Run doty link --dry-run - should detect broken symlink and schedule cleanup
-    let output = run_doty_link_dry_run(&config_path)
+    let dry_run_output = run_doty_link_dry_run(&config_path)
         .expect("doty link --dry-run should succeed even with missing source");
+
+    // Log dry-run output to file
+    write_logfile(&test_case_dir, "dry-run.log", &dry_run_output)
+        .expect("Failed to write dry-run log file");
 
     // Step 9: Validate Pruned action is present in output
     assert!(
-        output.contains("[x]"),
+        dry_run_output.contains("[x]"),
         "Output should contain [x] icon for Pruned action"
     );
     assert!(
-        output.contains("Pruned: Source missing, dangling link removal"),
+        dry_run_output.contains("Pruned: Source missing, dangling link removal"),
         "Output should contain Pruned message"
     );
     assert!(
-        output.contains("target/dummy"),
+        dry_run_output.contains("target/dummy"),
         "Output should mention the target path"
     );
 
@@ -170,16 +176,20 @@ fn test_02_link_folder_src_gone() {
     );
 
     // Step 11: Run doty link (without dry-run) - should actually remove the broken symlink
-    let output =
+    let real_run_output =
         run_doty_link(&config_path).expect("doty link should succeed even with missing source");
+
+    // Log real run output to file
+    write_logfile(&test_case_dir, "real-run.log", &real_run_output)
+        .expect("Failed to write real-run log file");
 
     // Step 12: Validate Pruned action is present in output
     assert!(
-        output.contains("[x]"),
+        real_run_output.contains("[x]"),
         "Output should contain [x] icon for Pruned action"
     );
     assert!(
-        output.contains("Pruned: Source missing, dangling link removal"),
+        real_run_output.contains("Pruned: Source missing, dangling link removal"),
         "Output should contain Pruned message"
     );
 

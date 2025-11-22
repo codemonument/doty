@@ -1,4 +1,4 @@
-use std::{fs, path::Path, process::Command};
+use std::{fs, io::Write, path::Path, process::Command};
 
 /// Helper function to get the path to the doty binary
 pub fn get_doty_binary() -> String {
@@ -66,6 +66,53 @@ pub fn run_doty_link_dry_run(config_path: &Path) -> Result<String, String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Helper function to write a log file in the test case directory
+/// ## Parameters
+/// test_case_dir: the test case directory path
+/// logfile_name: the name of the log file (e.g., "dry-run.log")
+/// content: the content to write to the log file
+/// ## Behavior
+/// - Creates a "logs" folder if it does not exist
+/// - Adds "logs/" to .gitignore in the testcase dir, creates the .gitignore if not present
+/// - Writes the log file to logs/{logfile_name}
+pub fn write_logfile(
+    test_case_dir: &Path,
+    logfile_name: &str,
+    content: &str,
+) -> Result<std::path::PathBuf, std::io::Error> {
+    // Create logs directory if it doesn't exist
+    let logs_dir = test_case_dir.join("logs");
+    fs::create_dir_all(&logs_dir)?;
+
+    // Ensure .gitignore exists and contains "logs/"
+    let gitignore_path = test_case_dir.join(".gitignore");
+    let mut gitignore_content = if gitignore_path.exists() {
+        fs::read_to_string(&gitignore_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    // Check if "logs/" is already in .gitignore
+    let logs_entry = "logs/\n";
+    if !gitignore_content.contains("logs/\n") {
+        // Append "logs/" to .gitignore
+        if !gitignore_content.is_empty() && !gitignore_content.ends_with('\n') {
+            gitignore_content.push('\n');
+        }
+        gitignore_content.push_str(logs_entry);
+
+        // Write updated .gitignore
+        let mut file = fs::File::create(&gitignore_path)?;
+        file.write_all(gitignore_content.as_bytes())?;
+    }
+
+    // Write the log file
+    let log_path = logs_dir.join(logfile_name);
+    fs::write(&log_path, content)?;
+
+    Ok(log_path)
 }
 
 /// Helper function to check if a path is a symlink pointing to the expected target
