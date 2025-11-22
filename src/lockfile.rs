@@ -80,11 +80,23 @@ impl Lockfile {
             }
         }
 
+        // Normalize all paths to absolute (for backward compatibility with old lockfiles)
+        let normalized_links: HashMap<Utf8PathBuf, Utf8PathBuf> = links
+            .into_iter()
+            .map(|(target, source)| {
+                let abs_target =
+                    Self::normalize_to_absolute(&target, &base_path).unwrap_or_else(|_| target);
+                let abs_source =
+                    Self::normalize_to_absolute(&source, &base_path).unwrap_or_else(|_| source);
+                (abs_target, abs_source)
+            })
+            .collect();
+
         Ok(Lockfile {
             hostname: hostname.to_string(),
             lockfile_version,
             base_path,
-            links,
+            links: normalized_links,
         })
     }
 
