@@ -600,7 +600,7 @@ mod tests {
         std::os::windows::fs::symlink_file(&zsh_source, &zshrc).unwrap();
 
         // Create state with absolute paths
-        let mut state = DotyState::new("test-host".to_string());
+        let mut state = DotyState::new("test-host".to_string(), config_dir_or_cwd.clone());
         state.add_link(nvim_link.clone(), Utf8PathBuf::from("nvim"));
         state.add_link(zshrc.clone(), Utf8PathBuf::from("zsh/.zshrc"));
 
@@ -628,7 +628,7 @@ mod tests {
         let zshrc = target_dir.join(".zshrc");
         fs::write(&zshrc, "# zshrc").unwrap();
 
-        let mut state = DotyState::new("test-host".to_string());
+        let mut state = DotyState::new("test-host".to_string(), config_dir_or_cwd.clone());
         state.add_link(zshrc.clone(), Utf8PathBuf::from("zsh/.zshrc"));
 
         let linker = Linker::new(config_dir_or_cwd.clone(), PathResolution::Config);

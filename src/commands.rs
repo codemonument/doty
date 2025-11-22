@@ -19,10 +19,19 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     let config_dir_or_cwd = match config.path_resolution {
         PathResolution::Config => {
             // Resolve relative to config file location
-            config_path
+            let config_dir = config_path
                 .parent()
-                .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?
-                .to_path_buf()
+                .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?;
+            
+            // Canonicalize to get absolute path
+            let abs_path = if config_dir.as_str().is_empty() || config_dir == "." {
+                Utf8PathBuf::from_path_buf(env::current_dir()?)
+                    .map_err(|_| anyhow::anyhow!("Current directory path is not valid UTF-8"))?
+            } else {
+                config_dir.canonicalize_utf8()?
+            };
+            
+            abs_path
         }
         PathResolution::Cwd => {
             // Resolve relative to current working directory
@@ -33,7 +42,7 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
 
     // Load state
     let state_dir = config_dir_or_cwd.join(".doty/state");
-    let mut state = DotyState::load(&state_dir, &hostname).context("Failed to load state")?;
+    let mut state = DotyState::load(&state_dir, &hostname, config_dir_or_cwd.clone()).context("Failed to load state")?;
 
     // Create linker
     let linker = Linker::new(config_dir_or_cwd.clone(), config.path_resolution);
@@ -163,10 +172,19 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     let config_dir_or_cwd = match config.path_resolution {
         PathResolution::Config => {
             // Resolve relative to config file location
-            config_path
+            let config_dir = config_path
                 .parent()
-                .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?
-                .to_path_buf()
+                .ok_or_else(|| anyhow::anyhow!("Config file has no parent directory"))?;
+            
+            // Canonicalize to get absolute path
+            let abs_path = if config_dir.as_str().is_empty() || config_dir == "." {
+                Utf8PathBuf::from_path_buf(env::current_dir()?)
+                    .map_err(|_| anyhow::anyhow!("Current directory path is not valid UTF-8"))?
+            } else {
+                config_dir.canonicalize_utf8()?
+            };
+            
+            abs_path
         }
         PathResolution::Cwd => {
             // Resolve relative to current working directory
@@ -177,7 +195,7 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
 
     // Load state
     let state_dir = config_dir_or_cwd.join(".doty/state");
-    let state = DotyState::load(&state_dir, &hostname).context("Failed to load state")?;
+    let state = DotyState::load(&state_dir, &hostname, config_dir_or_cwd.clone()).context("Failed to load state")?;
 
     if state.links.is_empty() {
         println!("No managed links found for host: {}", hostname);
@@ -185,7 +203,7 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
     }
 
     // Create linker
-    let linker = Linker::new(config_dir_or_cwd, config.path_resolution);
+    let linker = Linker::new(config_dir_or_cwd.clone(), config.path_resolution);
 
     // Clean all links
     println!("Removing {} managed link(s)...\n", state.links.len());
@@ -201,7 +219,7 @@ pub fn clean(config_path: Utf8PathBuf, dry_run: bool) -> Result<()> {
 
     // Clear state
     if !dry_run {
-        let empty_state = DotyState::new(hostname.clone());
+        let empty_state = DotyState::new(hostname.clone(), config_dir_or_cwd);
         empty_state
             .save(&state_dir)
             .context("Failed to save state")?;
