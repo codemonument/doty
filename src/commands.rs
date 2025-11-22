@@ -242,7 +242,7 @@ pub fn link(config_path: Utf8PathBuf, dry_run: bool, force: bool) -> Result<()> 
             println!("  {} {} warning(s)", "[!]".yellow().bold(), warnings);
         }
         if skipped > 0 {
-            println!("  {} {} link(s) unchanged", "·".dimmed(), skipped);
+            println!("  {} {} link(s) unchanged", "[·]".dimmed(), skipped);
         }
     } else if skipped > 0 {
         println!(
