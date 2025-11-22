@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 
 use crate::config::{DotyConfig, LinkStrategy, Package, PathResolution};
+use crate::fs_utils::{scan_directory_recursive, resolve_target_path, FsType, get_fs_type, read_symlink_target};
 use crate::state::DotyState;
 
 /// Represents the result of a linking operation
@@ -38,12 +39,7 @@ pub enum LinkAction {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum FsType {
-    File,
-    Directory,
-    Symlink,
-}
+
 
 #[derive(Debug, Clone)]
 struct LinkStatus {
@@ -228,7 +224,7 @@ impl Linker {
                     ));
                 }
                 LinkStrategy::LinkFilesRecursive => {
-                    if let Ok(files) = self.scan_directory_recursive(&source_path) {
+                    if let Ok(files) = scan_directory_recursive(&source_path) {
                         for file in files {
                             if let Ok(relative) = file.strip_prefix(&source_path) {
                                 let target_path = package.target.join(relative);
@@ -274,22 +270,14 @@ impl Linker {
             .config_resolved_target
             .as_ref()
             .expect("Target must exist");
-        let target_path = self.resolve_target_path(target)?;
+        let target_path = resolve_target_path(target, &self.config_dir_or_cwd)?;
 
-        if let Ok(metadata) = fs::symlink_metadata(&target_path) {
+        if let Some(fs_type) = get_fs_type(&target_path)? {
             status.target_exists = true;
-            if metadata.is_symlink() {
-                status.target_type = Some(FsType::Symlink);
-                if let Ok(target) = fs::read_link(&target_path) {
-                    if let Ok(canonical) = target.canonicalize() {
-                        status.target_points_to =
-                            Some(Utf8PathBuf::from_path_buf(canonical).unwrap_or_default());
-                    }
-                }
-            } else if metadata.is_dir() {
-                status.target_type = Some(FsType::Directory);
-            } else {
-                status.target_type = Some(FsType::File);
+            status.target_type = Some(fs_type);
+            
+            if fs_type == FsType::Symlink {
+                status.target_points_to = read_symlink_target(&target_path)?;
             }
         }
         Ok(())
@@ -393,17 +381,17 @@ impl Linker {
         match action {
             LinkAction::Created { target, source } => {
                 let source_path = self.config_dir_or_cwd.join(source);
-                let target_path = self.resolve_target_path(target)?;
+                let target_path = resolve_target_path(target, &self.config_dir_or_cwd)?;
                 self.create_link(&source_path, &target_path, dry_run)
             }
             LinkAction::Removed { target, .. } => {
-                let target_path = self.resolve_target_path(target)?;
+                let target_path = resolve_target_path(target, &self.config_dir_or_cwd)?;
                 self.remove_link(&target_path, dry_run)
             }
             LinkAction::Updated {
                 target, new_source, ..
             } => {
-                let target_path = self.resolve_target_path(target)?;
+                let target_path = resolve_target_path(target, &self.config_dir_or_cwd)?;
                 let new_source_path = self.config_dir_or_cwd.join(new_source);
                 self.remove_link(&target_path, dry_run)?;
                 self.create_link(&new_source_path, &target_path, dry_run)
@@ -412,24 +400,7 @@ impl Linker {
         }
     }
 
-    /// Scan directory recursively and return all files
-    fn scan_directory_recursive(&self, dir: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
-        let mut files = Vec::new();
 
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let entry_path = Utf8PathBuf::from_path_buf(entry.path())
-                .map_err(|_| anyhow::anyhow!("Path contains invalid UTF-8"))?;
-
-            if entry_path.is_dir() {
-                files.extend(self.scan_directory_recursive(&entry_path)?);
-            } else {
-                files.push(entry_path);
-            }
-        }
-
-        Ok(files)
-    }
 
     /// Create a symlink (helper for execute_action)
     fn create_link(&self, source: &Utf8Path, target: &Utf8Path, dry_run: bool) -> Result<()> {
@@ -473,7 +444,7 @@ impl Linker {
         let mut actions = Vec::new();
 
         for (target, source) in &state.links {
-            let target_path = self.resolve_target_path(target)?;
+            let target_path = resolve_target_path(target, &self.config_dir_or_cwd)?;
 
             // Check if the symlink exists (using symlink_metadata to handle broken symlinks)
             if let Ok(metadata) = fs::symlink_metadata(&target_path) {
@@ -494,27 +465,7 @@ impl Linker {
         Ok(actions)
     }
 
-    /// Resolve a target path (handle ~ expansion, absolute paths, and relative paths)
-    fn resolve_target_path(&self, target: &Utf8Path) -> Result<Utf8PathBuf> {
-        let path_str = target.as_str();
 
-        // Handle ~ expansion (relative to HOME)
-        if let Some(stripped) = path_str.strip_prefix("~/") {
-            let home_dir = std::env::var("HOME").context("HOME environment variable not set")?;
-            return Ok(Utf8PathBuf::from(home_dir).join(stripped));
-        } else if path_str == "~" {
-            let home_dir = std::env::var("HOME").context("HOME environment variable not set")?;
-            return Ok(Utf8PathBuf::from(home_dir));
-        }
-
-        // Handle absolute paths
-        if target.is_absolute() {
-            return Ok(target.to_path_buf());
-        }
-
-        // Handle relative paths - config_dir_or_cwd already contains the resolved directory
-        Ok(self.config_dir_or_cwd.join(target))
-    }
 
     /// Create a symlink
     fn create_symlink(&self, source: &Utf8Path, target: &Utf8Path) -> Result<()> {

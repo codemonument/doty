@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod fs_utils;
 mod linker;
 mod state;
 
