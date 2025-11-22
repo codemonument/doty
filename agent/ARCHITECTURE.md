@@ -260,11 +260,11 @@ LinkFilesRecursive "zsh/scripts" target="~/scripts"
 
 ### Phase 3: Detection & Adoption
 
-- [ ] **Scanner**: Implement logic to scan targets and compare with
+- [x] **Scanner**: Implement logic to scan targets and compare with
       Source/State.
-- [ ] **Command: Detect**: Implement reporting of untracked/broken files.
+- [x] **Command: Detect**: Implement reporting of untracked/broken files.
 - [ ] **Command: Adopt**: Implement file moving and config updating logic.
-- [ ] **Interactivity**: Add prompts to `detect` for immediate adoption/cleanup.
+- [x] **Interactivity**: Add prompts to `detect` for immediate adoption/cleanup.
 
 ### Phase 4: Polish & CLI Experience
 

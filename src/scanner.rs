@@ -53,18 +53,21 @@ impl Scanner {
 
         // Check for broken symlinks from state that aren't already covered by package scanning
         for (state_target, _) in &state.links {
+            // Resolve state target to absolute path
+            let resolved_target = resolve_target_path(state_target, &self.config_dir_or_cwd)?;
+
             // Skip if this target is already covered by a package
             let is_covered_by_package = config.packages.iter().any(|pkg| {
                 let pkg_target = resolve_target_path(&pkg.target, &self.config_dir_or_cwd).unwrap_or_default();
-                state_target.starts_with(pkg_target)
+                resolved_target.starts_with(pkg_target)
             });
             
             if !is_covered_by_package {
-                if let Some(fs_type) = get_fs_type(state_target)? {
+                if let Some(fs_type) = get_fs_type(&resolved_target)? {
                     if fs_type == crate::fs_utils::FsType::Symlink {
-                        if is_broken_symlink(state_target)? {
+                        if is_broken_symlink(&resolved_target)? {
                             drift_items.push(DriftItem {
-                                target_path: state_target.clone(),
+                                target_path: resolved_target,
                                 drift_type: DriftType::Broken,
                                 package: None, // We don't know which package this belongs to
                             });
@@ -96,7 +99,7 @@ impl Scanner {
                 // No untracked file detection needed for LinkFolder
                 if is_broken_symlink(&target_path)? {
                     drift_items.push(DriftItem {
-                        target_path: package.target.clone(),
+                        target_path: target_path.clone(),
                         drift_type: DriftType::Broken,
                         package: Some(package.clone()),
                     });
@@ -126,7 +129,7 @@ impl Scanner {
                     // For file sources, just check if the target is broken
                     if is_broken_symlink(&target_path)? {
                         drift_items.push(DriftItem {
-                            target_path: package.target.clone(),
+                            target_path: target_path.clone(),
                             drift_type: DriftType::Broken,
                             package: Some(package.clone()),
                         });
@@ -365,6 +368,47 @@ mod tests {
 
         assert_eq!(broken_items.len(), 1);
         assert_eq!(broken_items[0].target_path, broken_target);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_scan_broken_symlinks_relative_path_different_cwd() -> Result<()> {
+        let (_temp_dir, temp_path, config, mut state) = setup_test_env()?;
+
+        // Create source file
+        let source_file = temp_path.join("source").join("test-app.txt");
+        fs::write(&source_file, "content")?;
+
+        // Create target symlink
+        let target_file = temp_path.join("target").join("test-app.txt");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&source_file, &target_file)?;
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&source_file, &target_file)?;
+
+        // Add to state using RELATIVE path
+        // target/test-app.txt relative to temp_path
+        let relative_target = Utf8PathBuf::from("target/test-app.txt");
+        state.add_link(relative_target.clone(), Utf8PathBuf::from("test-app.txt"));
+
+        // Remove source file to break the symlink
+        fs::remove_file(&source_file)?;
+
+        // Scanner uses temp_path as config_dir
+        let scanner = Scanner::new(temp_path.clone());
+        
+        // We are running in project root (CWD), which is NOT temp_path.
+        // So if Scanner doesn't resolve relative_target against temp_path, it will look for "target/test-app.txt" in project root and fail to find it.
+        
+        let drift_items = scanner.scan_targets(&config, &state)?;
+
+        // Should detect broken symlink
+        assert_eq!(drift_items.len(), 1);
+        assert_eq!(drift_items[0].drift_type, DriftType::Broken);
+        
+        // The returned path should be ABSOLUTE (resolved)
+        assert_eq!(drift_items[0].target_path, target_file);
 
         Ok(())
     }
